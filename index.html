@@ -1,0 +1,638 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+  <meta name="theme-color" content="#111111" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="GipfelPeiler" />
+  <link rel="manifest" href="manifest.json" />
+  <title>GipfelPeiler</title>
+  <style>
+    :root {
+      --safe-top: env(safe-area-inset-top);
+      --safe-bottom: env(safe-area-inset-bottom);
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #000;
+      color: #fff;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    #app { position: fixed; inset: 0; background: #000; }
+    video, canvas.preview {
+      position: absolute; inset: 0;
+      width: 100%; height: 100%;
+      object-fit: cover;
+      background: #000;
+    }
+
+    .topbar {
+      position: absolute;
+      top: calc(var(--safe-top) + 8px);
+      left: 12px; right: 12px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      z-index: 10;
+      pointer-events: none;
+    }
+    .pill {
+      background: rgba(0,0,0,.58);
+      border: 1px solid rgba(255,255,255,.25);
+      border-radius: 18px;
+      padding: 8px 12px;
+      backdrop-filter: blur(8px);
+      font-size: 14px;
+      pointer-events: auto;
+    }
+    button.pill {
+      color: white;
+      cursor: pointer;
+    }
+
+    #compassTape {
+      position: absolute;
+      top: calc(var(--safe-top) + 58px);
+      left: 0; right: 0;
+      height: 72px;
+      z-index: 8;
+      pointer-events: none;
+      overflow: hidden;
+      background: linear-gradient(to bottom, rgba(0,0,0,.45), rgba(0,0,0,0));
+    }
+    #ticks {
+      position: absolute;
+      left: 50%; top: 0;
+      height: 72px;
+      transform: translateX(-50%);
+      white-space: nowrap;
+    }
+    .tick {
+      position: absolute;
+      top: 16px;
+      width: 1px;
+      background: rgba(255,255,255,.8);
+    }
+    .tick.major { height: 22px; }
+    .tick.minor { height: 12px; opacity: .65; }
+    .tick .label {
+      position: absolute;
+      top: 26px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 12px;
+      font-weight: 600;
+      text-shadow: 0 1px 3px #000;
+    }
+    #centerMark {
+      position: absolute;
+      left: 50%; top: 0;
+      width: 2px; height: 52px;
+      transform: translateX(-50%);
+      background: #fff;
+      box-shadow: 0 0 4px #000;
+    }
+
+    #crosshair {
+      position: absolute;
+      left: 50%; top: 50%;
+      width: 76px; height: 76px;
+      transform: translate(-50%, -50%);
+      z-index: 8;
+      pointer-events: none;
+    }
+    #crosshair:before, #crosshair:after {
+      content: "";
+      position: absolute;
+      background: rgba(255,255,255,.95);
+      box-shadow: 0 0 4px #000;
+    }
+    #crosshair:before {
+      width: 2px; height: 76px;
+      left: 37px; top: 0;
+    }
+    #crosshair:after {
+      height: 2px; width: 76px;
+      left: 0; top: 37px;
+    }
+    #crosshair .ring {
+      position: absolute;
+      left: 24px; top: 24px;
+      width: 28px; height: 28px;
+      border: 2px solid rgba(255,255,255,.95);
+      border-radius: 50%;
+      box-shadow: 0 0 4px #000;
+    }
+
+    #readout {
+      position: absolute;
+      top: calc(50% + 52px);
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 8;
+      text-align: center;
+      background: rgba(0,0,0,.45);
+      padding: 7px 12px;
+      border-radius: 14px;
+      min-width: 120px;
+      pointer-events: none;
+    }
+    #heading {
+      font-size: 24px;
+      font-weight: 700;
+      letter-spacing: .4px;
+    }
+    #cardinal, #pitch {
+      font-size: 13px;
+      opacity: .9;
+      margin-top: 2px;
+    }
+
+    .bottom {
+      position: absolute;
+      left: 0; right: 0;
+      bottom: calc(var(--safe-bottom) + 14px);
+      z-index: 10;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 20px;
+    }
+    #shutter {
+      width: 76px; height: 76px;
+      border-radius: 50%;
+      border: 4px solid #fff;
+      background: rgba(255,255,255,.18);
+      box-shadow: 0 0 0 2px rgba(0,0,0,.35);
+    }
+    #shutter:active { transform: scale(.96); }
+
+    #zoomControls {
+      position: absolute;
+      bottom: calc(var(--safe-bottom) + 112px);
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 10;
+      display: flex;
+      gap: 8px;
+    }
+    .zoomBtn {
+      border: none;
+      color: #fff;
+      background: rgba(0,0,0,.55);
+      border: 1px solid rgba(255,255,255,.25);
+      border-radius: 16px;
+      padding: 7px 11px;
+      font-weight: 600;
+    }
+
+    #startPanel {
+      position: absolute;
+      inset: 0;
+      z-index: 30;
+      background: rgba(0,0,0,.88);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 28px;
+    }
+    .card {
+      width: min(520px, 100%);
+      background: #161616;
+      border: 1px solid #333;
+      border-radius: 20px;
+      padding: 22px;
+    }
+    .card h1 { margin: 0 0 12px; font-size: 28px; }
+    .card p { color: #ddd; line-height: 1.45; }
+    .primary {
+      width: 100%;
+      margin-top: 12px;
+      border: 0;
+      border-radius: 14px;
+      padding: 14px 16px;
+      font-size: 17px;
+      font-weight: 700;
+      background: #fff;
+      color: #111;
+    }
+    #status {
+      font-size: 13px;
+      margin-top: 12px;
+      color: #bbb;
+      min-height: 18px;
+    }
+
+    #photoModal {
+      position: absolute;
+      inset: 0;
+      z-index: 40;
+      background: rgba(0,0,0,.96);
+      display: none;
+      flex-direction: column;
+    }
+    #captured {
+      flex: 1;
+      width: 100%;
+      min-height: 0;
+      object-fit: contain;
+      background: #000;
+    }
+    .photoActions {
+      padding: 12px 12px calc(var(--safe-bottom) + 12px);
+      display: flex;
+      gap: 10px;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+    .actionBtn {
+      border: 0;
+      border-radius: 14px;
+      padding: 12px 14px;
+      font-size: 15px;
+      font-weight: 600;
+    }
+
+    #namePanel {
+      position: absolute;
+      inset: 0;
+      z-index: 50;
+      display: none;
+      background: rgba(0,0,0,.88);
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+    #namePanel .card input {
+      width: 100%;
+      padding: 12px;
+      font-size: 17px;
+      border-radius: 10px;
+      border: 1px solid #555;
+      background: #0d0d0d;
+      color: #fff;
+      margin: 8px 0;
+    }
+  </style>
+</head>
+<body>
+<div id="app">
+  <video id="video" autoplay playsinline muted></video>
+
+  <div class="topbar">
+    <div class="pill" id="sensorStatus">Kompass: –</div>
+    <button class="pill" id="flipBtn">Kamera wechseln</button>
+  </div>
+
+  <div id="compassTape">
+    <div id="ticks"></div>
+    <div id="centerMark"></div>
+  </div>
+
+  <div id="crosshair"><div class="ring"></div></div>
+
+  <div id="readout">
+    <div id="heading">---.-°</div>
+    <div id="cardinal">–</div>
+    <div id="pitch">Neigung: –</div>
+  </div>
+
+  <div id="zoomControls">
+    <button class="zoomBtn" data-zoom="1">1×</button>
+    <button class="zoomBtn" data-zoom="2">2×</button>
+    <button class="zoomBtn" data-zoom="3">3×</button>
+  </div>
+
+  <div class="bottom">
+    <button id="shutter" aria-label="Foto aufnehmen"></button>
+  </div>
+
+  <div id="startPanel">
+    <div class="card">
+      <h1>GipfelPeiler</h1>
+      <p>Diese Testversion zeigt das Kamerabild, ein Fadenkreuz und die Kompassrichtung. Auf dem iPhone müssen Kamera- und Bewegungssensoren einmal freigegeben werden.</p>
+      <button id="startBtn" class="primary">Kamera & Kompass starten</button>
+      <div id="status"></div>
+    </div>
+  </div>
+
+  <div id="photoModal">
+    <canvas id="captured"></canvas>
+    <div class="photoActions">
+      <button class="actionBtn" id="savePlain">Foto ohne Einblendung</button>
+      <button class="actionBtn" id="saveDegrees">Foto mit Grad</button>
+      <button class="actionBtn" id="addName">Gipfelname hinzufügen</button>
+      <button class="actionBtn" id="closePhoto">Zurück</button>
+    </div>
+  </div>
+
+  <div id="namePanel">
+    <div class="card">
+      <h2>Gipfelname</h2>
+      <input id="peakName" type="text" placeholder="z. B. Plettenberg" />
+      <button class="primary" id="saveNamed">Foto mit Gipfelname</button>
+      <button class="primary" id="cancelName">Abbrechen</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  const video = document.getElementById('video');
+  const startPanel = document.getElementById('startPanel');
+  const startBtn = document.getElementById('startBtn');
+  const status = document.getElementById('status');
+  const headingEl = document.getElementById('heading');
+  const cardinalEl = document.getElementById('cardinal');
+  const pitchEl = document.getElementById('pitch');
+  const sensorStatus = document.getElementById('sensorStatus');
+  const ticks = document.getElementById('ticks');
+  const shutter = document.getElementById('shutter');
+  const photoModal = document.getElementById('photoModal');
+  const canvas = document.getElementById('captured');
+  const ctx = canvas.getContext('2d');
+  const flipBtn = document.getElementById('flipBtn');
+  const namePanel = document.getElementById('namePanel');
+  const peakNameInput = document.getElementById('peakName');
+
+  let stream = null;
+  let facingMode = 'environment';
+  let heading = null;
+  let pitch = null;
+  let plainFrame = null;
+  let currentZoom = 1;
+
+  function cardinal(deg) {
+    const dirs = ['N','NO','O','SO','S','SW','W','NW'];
+    return dirs[Math.round(deg / 45) % 8];
+  }
+
+  function normalize(deg) {
+    return ((deg % 360) + 360) % 360;
+  }
+
+  function buildTicks() {
+    ticks.innerHTML = '';
+    const pxPerDeg = 6;
+    for (let d = -180; d <= 180; d += 5) {
+      const el = document.createElement('div');
+      el.className = 'tick ' + (d % 10 === 0 ? 'major' : 'minor');
+      el.style.left = (d * pxPerDeg) + 'px';
+      if (d % 10 === 0) {
+        const lab = document.createElement('div');
+        lab.className = 'label';
+        lab.textContent = '0';
+        el.appendChild(lab);
+      }
+      ticks.appendChild(el);
+    }
+  }
+  buildTicks();
+
+  function updateTape() {
+    if (heading == null) return;
+    const pxPerDeg = 6;
+    [...ticks.children].forEach((el, i) => {
+      const d = -180 + i * 5;
+      const absolute = normalize(Math.round((heading + d) / 5) * 5);
+      const lab = el.querySelector('.label');
+      if (lab) {
+        if (absolute === 0) lab.textContent = 'N';
+        else if (absolute === 90) lab.textContent = 'O';
+        else if (absolute === 180) lab.textContent = 'S';
+        else if (absolute === 270) lab.textContent = 'W';
+        else lab.textContent = absolute;
+      }
+      el.style.left = (d * pxPerDeg) + 'px';
+    });
+  }
+
+  function handleOrientation(event) {
+    let h = null;
+
+    // iOS Safari liefert webkitCompassHeading direkt bezogen auf Norden.
+    if (typeof event.webkitCompassHeading === 'number') {
+      h = event.webkitCompassHeading;
+    } else if (typeof event.alpha === 'number') {
+      h = normalize(360 - event.alpha);
+    }
+
+    if (h != null && isFinite(h)) {
+      heading = h;
+      headingEl.textContent = h.toFixed(1) + '°';
+      cardinalEl.textContent = cardinal(h);
+      sensorStatus.textContent = 'Kompass: aktiv';
+      updateTape();
+    }
+
+    if (typeof event.beta === 'number') {
+      pitch = event.beta;
+      pitchEl.textContent = 'Neigung: ' + pitch.toFixed(1) + '°';
+    }
+  }
+
+  async function requestOrientationPermission() {
+    try {
+      if (typeof DeviceOrientationEvent !== 'undefined' &&
+          typeof DeviceOrientationEvent.requestPermission === 'function') {
+        const permission = await DeviceOrientationEvent.requestPermission();
+        if (permission !== 'granted') throw new Error('Bewegungssensor nicht freigegeben.');
+      }
+      window.addEventListener('deviceorientation', handleOrientation, true);
+    } catch (err) {
+      sensorStatus.textContent = 'Kompass: blockiert';
+      throw err;
+    }
+  }
+
+  async function startCamera() {
+    if (stream) stream.getTracks().forEach(t => t.stop());
+
+    const constraints = {
+      audio: false,
+      video: {
+        facingMode: { ideal: facingMode },
+        width: { ideal: 1920 },
+        height: { ideal: 1080 }
+      }
+    };
+
+    stream = await navigator.mediaDevices.getUserMedia(constraints);
+    video.srcObject = stream;
+    await video.play();
+    applyZoom(currentZoom);
+  }
+
+  async function applyZoom(value) {
+    currentZoom = value;
+    if (!stream) return;
+    const track = stream.getVideoTracks()[0];
+    if (!track || !track.getCapabilities) return;
+
+    const caps = track.getCapabilities();
+    if (!caps.zoom) return;
+
+    const min = caps.zoom.min ?? 1;
+    const max = caps.zoom.max ?? 1;
+    const zoom = Math.min(max, Math.max(min, value));
+    try {
+      await track.applyConstraints({ advanced: [{ zoom }] });
+    } catch (e) {
+      console.log('Zoom wird von diesem Browser/Kameramodus nicht unterstützt.', e);
+    }
+  }
+
+  document.querySelectorAll('.zoomBtn').forEach(btn => {
+    btn.addEventListener('click', () => applyZoom(Number(btn.dataset.zoom)));
+  });
+
+  startBtn.addEventListener('click', async () => {
+    status.textContent = 'Berechtigungen werden angefordert …';
+    try {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        throw new Error('Kamerazugriff wird von diesem Browser nicht unterstützt.');
+      }
+      await requestOrientationPermission();
+      await startCamera();
+      startPanel.style.display = 'none';
+    } catch (err) {
+      status.textContent = err.message || 'Start nicht möglich.';
+    }
+  });
+
+  flipBtn.addEventListener('click', async () => {
+    facingMode = facingMode === 'environment' ? 'user' : 'environment';
+    try { await startCamera(); } catch (e) { alert('Kamerawechsel nicht möglich.'); }
+  });
+
+  function drawBaseFrame() {
+    const vw = video.videoWidth;
+    const vh = video.videoHeight;
+    if (!vw || !vh) return false;
+
+    canvas.width = vw;
+    canvas.height = vh;
+    ctx.drawImage(video, 0, 0, vw, vh);
+
+    plainFrame = document.createElement('canvas');
+    plainFrame.width = vw;
+    plainFrame.height = vh;
+    plainFrame.getContext('2d').drawImage(video, 0, 0, vw, vh);
+    return true;
+  }
+
+  function overlayDegrees(targetCtx, w, h, withName = false, name = '') {
+    const scale = Math.max(1, w / 1200);
+    targetCtx.save();
+
+    // Fadenkreuz
+    targetCtx.strokeStyle = 'rgba(255,255,255,.95)';
+    targetCtx.lineWidth = 2 * scale;
+    targetCtx.shadowColor = 'rgba(0,0,0,.8)';
+    targetCtx.shadowBlur = 5 * scale;
+    const cx = w / 2, cy = h / 2;
+    const arm = 50 * scale;
+    targetCtx.beginPath();
+    targetCtx.moveTo(cx - arm, cy);
+    targetCtx.lineTo(cx + arm, cy);
+    targetCtx.moveTo(cx, cy - arm);
+    targetCtx.lineTo(cx, cy + arm);
+    targetCtx.stroke();
+
+    // Gradangabe
+    const text = heading != null ? heading.toFixed(1) + '° ' + cardinal(heading) : '---.-°';
+    targetCtx.font = `700 ${34 * scale}px -apple-system, BlinkMacSystemFont, sans-serif`;
+    targetCtx.textAlign = 'center';
+    targetCtx.fillStyle = '#fff';
+    targetCtx.fillText(text, cx, cy + 88 * scale);
+
+    if (withName && name.trim()) {
+      targetCtx.font = `600 ${36 * scale}px -apple-system, BlinkMacSystemFont, sans-serif`;
+      targetCtx.textAlign = 'left';
+      const pad = 28 * scale;
+      const y = h - 42 * scale;
+      const metrics = targetCtx.measureText(name.trim());
+      const boxW = metrics.width + pad * 1.4;
+      const boxH = 56 * scale;
+      targetCtx.fillStyle = 'rgba(0,0,0,.52)';
+      targetCtx.fillRect(pad * .6, y - boxH + 12 * scale, boxW, boxH);
+      targetCtx.fillStyle = '#fff';
+      targetCtx.fillText(name.trim(), pad, y);
+    }
+    targetCtx.restore();
+  }
+
+  shutter.addEventListener('click', () => {
+    if (!drawBaseFrame()) return;
+    overlayDegrees(ctx, canvas.width, canvas.height);
+    photoModal.style.display = 'flex';
+  });
+
+  function downloadCanvas(sourceCanvas, filename) {
+    sourceCanvas.toBlob(blob => {
+      if (!blob) return;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1500);
+    }, 'image/jpeg', 0.95);
+  }
+
+  document.getElementById('savePlain').addEventListener('click', () => {
+    if (plainFrame) downloadCanvas(plainFrame, 'GipfelPeiler_Original.jpg');
+  });
+
+  document.getElementById('saveDegrees').addEventListener('click', () => {
+    const temp = document.createElement('canvas');
+    temp.width = plainFrame.width;
+    temp.height = plainFrame.height;
+    const tctx = temp.getContext('2d');
+    tctx.drawImage(plainFrame, 0, 0);
+    overlayDegrees(tctx, temp.width, temp.height);
+    downloadCanvas(temp, 'GipfelPeiler_Grad.jpg');
+  });
+
+  document.getElementById('addName').addEventListener('click', () => {
+    namePanel.style.display = 'flex';
+    setTimeout(() => peakNameInput.focus(), 50);
+  });
+
+  document.getElementById('saveNamed').addEventListener('click', () => {
+    if (!plainFrame) return;
+    const temp = document.createElement('canvas');
+    temp.width = plainFrame.width;
+    temp.height = plainFrame.height;
+    const tctx = temp.getContext('2d');
+    tctx.drawImage(plainFrame, 0, 0);
+    overlayDegrees(tctx, temp.width, temp.height, true, peakNameInput.value);
+    downloadCanvas(temp, 'GipfelPeiler_' + (peakNameInput.value.trim() || 'Gipfel') + '.jpg');
+    namePanel.style.display = 'none';
+  });
+
+  document.getElementById('cancelName').addEventListener('click', () => {
+    namePanel.style.display = 'none';
+  });
+
+  document.getElementById('closePhoto').addEventListener('click', () => {
+    photoModal.style.display = 'none';
+  });
+
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('./service-worker.js').catch(console.error);
+    });
+  }
+})();
+</script>
+</body>
+</html>
