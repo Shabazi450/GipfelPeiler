@@ -1,4 +1,4 @@
-const CACHE = 'gipfelpeiler-v1';
+const CACHE = 'gipfelpeiler-v2';
 const ASSETS = [
   './',
   './index.html',

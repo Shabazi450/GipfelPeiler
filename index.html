@@ -316,7 +316,7 @@
   <div id="startPanel">
     <div class="card">
       <h1>GipfelPeiler</h1>
-      <p>Diese Testversion zeigt das Kamerabild, ein Fadenkreuz und die Kompassrichtung. Auf dem iPhone müssen Kamera- und Bewegungssensoren einmal freigegeben werden.</p>
+      <p>Version 2 zeigt das Kamerabild, ein Fadenkreuz, eine feinere Kompassskala und den korrigierten Höhenwinkel. Auf dem iPhone müssen Kamera- und Bewegungssensoren einmal freigegeben werden.</p>
       <button id="startBtn" class="primary">Kamera & Kompass starten</button>
       <div id="status"></div>
     </div>
@@ -380,10 +380,14 @@
   function buildTicks() {
     ticks.innerHTML = '';
     const pxPerDeg = 6;
-    for (let d = -180; d <= 180; d += 5) {
+    for (let d = -180; d <= 180; d += 1) {
       const el = document.createElement('div');
       el.className = 'tick ' + (d % 10 === 0 ? 'major' : 'minor');
       el.style.left = (d * pxPerDeg) + 'px';
+      if (d % 5 === 0 && d % 10 !== 0) {
+        el.style.height = '17px';
+        el.style.opacity = '.8';
+      }
       if (d % 10 === 0) {
         const lab = document.createElement('div');
         lab.className = 'label';
@@ -399,8 +403,8 @@
     if (heading == null) return;
     const pxPerDeg = 6;
     [...ticks.children].forEach((el, i) => {
-      const d = -180 + i * 5;
-      const absolute = normalize(Math.round((heading + d) / 5) * 5);
+      const d = -180 + i;
+      const absolute = normalize(Math.round(heading + d));
       const lab = el.querySelector('.label');
       if (lab) {
         if (absolute === 0) lab.textContent = 'N';
@@ -432,8 +436,13 @@
     }
 
     if (typeof event.beta === 'number') {
-      pitch = event.beta;
-      pitchEl.textContent = 'Neigung: ' + pitch.toFixed(1) + '°';
+      // In Portrait-Haltung entspricht beta≈90° einer waagerechten Blickrichtung.
+      // Positiv = Kamera zeigt über den Horizont, negativ = darunter.
+      pitch = 90 - event.beta;
+      if (pitch > 90) pitch -= 180;
+      if (pitch < -90) pitch += 180;
+      const sign = pitch >= 0 ? '+' : '';
+      pitchEl.textContent = 'Höhenwinkel: ' + sign + pitch.toFixed(1) + '°';
     }
   }
 
