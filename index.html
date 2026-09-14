@@ -287,6 +287,7 @@
 
   <div class="topbar">
     <div class="pill" id="sensorStatus">Kompass: –</div>
+    <div class="pill" id="gpsStatus">GPS: –</div>
     <button class="pill" id="flipBtn">Kamera wechseln</button>
   </div>
 
@@ -316,7 +317,7 @@
   <div id="startPanel">
     <div class="card">
       <h1>GipfelPeiler</h1>
-      <p>Version 3 zeigt das Kamerabild, ein Fadenkreuz, eine feinere Kompassskala und den korrigierten Höhenwinkel. Auf dem iPhone müssen Kamera- und Bewegungssensoren einmal freigegeben werden.</p>
+      <p>Version 4 zeigt das Kamerabild, ein Fadenkreuz, eine feinere Kompassskala und den korrigierten Höhenwinkel. Auf dem iPhone müssen Kamera- und Bewegungssensoren einmal freigegeben werden.</p>
       <button id="startBtn" class="primary">Kamera & Kompass starten</button>
       <div id="status"></div>
     </div>
@@ -328,6 +329,7 @@
       <button class="actionBtn" id="savePlain">Original</button>
       <button class="actionBtn" id="saveDegrees">Peilfoto</button>
       <button class="actionBtn" id="addName">Postfoto</button>
+      <button class="actionBtn" id="saveData">Aufnahmedaten</button>
       <button class="actionBtn" id="closePhoto">Zurück</button>
     </div>
   </div>
@@ -352,6 +354,7 @@
   const cardinalEl = document.getElementById('cardinal');
   const pitchEl = document.getElementById('pitch');
   const sensorStatus = document.getElementById('sensorStatus');
+  const gpsStatus = document.getElementById('gpsStatus');
   const ticks = document.getElementById('ticks');
   const shutter = document.getElementById('shutter');
   const photoModal = document.getElementById('photoModal');
@@ -369,6 +372,13 @@
   let shotHeading = null;
   let shotPitch = null;
   let shotCardinal = '';
+  let latitude = null;
+  let longitude = null;
+  let gpsAccuracy = null;
+  let shotLatitude = null;
+  let shotLongitude = null;
+  let shotGpsAccuracy = null;
+  let shotTime = null;
   let currentZoom = 1;
 
   function cardinal(deg) {
@@ -438,15 +448,54 @@
       updateTape();
     }
 
-    if (typeof event.beta === 'number') {
-      // In Portrait-Haltung entspricht beta≈90° einer waagerechten Blickrichtung.
-      // Positiv = Kamera zeigt über den Horizont, negativ = darunter.
-      pitch = event.beta - 90;
+    if (typeof event.beta === 'number' && typeof event.gamma === 'number') {
+      // Kamerablickwinkel aus der Schwerkraftrichtung berechnen.
+      // Funktioniert in Hochformat sowie Querformat links/rechts.
+      const beta = event.beta * Math.PI / 180;
+      const gamma = event.gamma * Math.PI / 180;
+      const screenAngle = (screen.orientation && typeof screen.orientation.angle === 'number')
+        ? screen.orientation.angle
+        : (typeof window.orientation === 'number' ? window.orientation : 0);
+
+      let rawPitch;
+      if (Math.abs(screenAngle) === 90 || Math.abs(screenAngle) === 270) {
+        // Querformat: gamma beschreibt die Kameraneigung wesentlich besser.
+        rawPitch = screenAngle === 90 ? event.gamma : -event.gamma;
+      } else {
+        // Hochformat
+        rawPitch = event.beta - 90;
+      }
+
+      pitch = rawPitch;
       if (pitch > 90) pitch -= 180;
       if (pitch < -90) pitch += 180;
       const sign = pitch >= 0 ? '+' : '';
       pitchEl.textContent = 'Höhenwinkel: ' + sign + pitch.toFixed(1) + '°';
     }
+  }
+
+  function startGPS() {
+    if (!navigator.geolocation) {
+      gpsStatus.textContent = 'GPS: nicht verfügbar';
+      return;
+    }
+    navigator.geolocation.watchPosition(
+      pos => {
+        latitude = pos.coords.latitude;
+        longitude = pos.coords.longitude;
+        gpsAccuracy = pos.coords.accuracy;
+        gpsStatus.textContent = 'GPS: ±' + Math.round(gpsAccuracy) + ' m';
+      },
+      err => {
+        gpsStatus.textContent = 'GPS: blockiert';
+        console.log('GPS-Fehler', err);
+      },
+      {
+        enableHighAccuracy: true,
+        maximumAge: 3000,
+        timeout: 12000
+      }
+    );
   }
 
   async function requestOrientationPermission() {
@@ -511,6 +560,7 @@
         throw new Error('Kamerazugriff wird von diesem Browser nicht unterstützt.');
       }
       await requestOrientationPermission();
+      startGPS();
       await startCamera();
       startPanel.style.display = 'none';
     } catch (err) {
@@ -560,6 +610,10 @@
     shotHeading = heading;
     shotPitch = pitch;
     shotCardinal = heading != null ? cardinal(heading) : '';
+    shotLatitude = latitude;
+    shotLongitude = longitude;
+    shotGpsAccuracy = gpsAccuracy;
+    shotTime = new Date();
     return true;
   }
 
@@ -588,14 +642,24 @@
       ? 'Höhenwinkel ' + (shotPitch >= 0 ? '+' : '') + shotPitch.toFixed(1) + '°'
       : '';
 
+    // Messdaten dezent am unteren Bildrand, damit der Gipfel frei bleibt.
+    const bottomY = h - 42 * scale;
+    const gpsText = (shotLatitude != null && shotLongitude != null)
+      ? 'GPS ' + shotLatitude.toFixed(5) + ', ' + shotLongitude.toFixed(5) +
+        (shotGpsAccuracy != null ? '  ±' + Math.round(shotGpsAccuracy) + ' m' : '')
+      : 'GPS nicht verfügbar';
+    const timeText = shotTime
+      ? shotTime.toLocaleString('de-DE', { dateStyle: 'short', timeStyle: 'medium' })
+      : '';
+
     targetCtx.textAlign = 'center';
     targetCtx.fillStyle = '#fff';
-    targetCtx.font = `700 ${34 * scale}px -apple-system, BlinkMacSystemFont, sans-serif`;
-    targetCtx.fillText(degreeText, cx, cy + 88 * scale);
-    if (pitchText) {
-      targetCtx.font = `500 ${22 * scale}px -apple-system, BlinkMacSystemFont, sans-serif`;
-      targetCtx.fillText(pitchText, cx, cy + 119 * scale);
-    }
+    targetCtx.shadowColor = 'rgba(0,0,0,.9)';
+    targetCtx.shadowBlur = 5 * scale;
+    targetCtx.font = `700 ${30 * scale}px -apple-system, BlinkMacSystemFont, sans-serif`;
+    targetCtx.fillText(degreeText + (pitchText ? '   ·   ' + pitchText : ''), cx, bottomY - 38 * scale);
+    targetCtx.font = `500 ${18 * scale}px -apple-system, BlinkMacSystemFont, sans-serif`;
+    targetCtx.fillText(gpsText + (timeText ? '   ·   ' + timeText : ''), cx, bottomY);
     targetCtx.restore();
   }
 
@@ -663,6 +727,33 @@
     overlayPeilung(tctx, temp.width, temp.height);
     downloadCanvas(temp, 'GipfelPeiler_Peilfoto.jpg');
   });
+
+
+  function downloadMetadata() {
+    const data = {
+      app: 'GipfelPeiler',
+      version: 4,
+      timestamp: shotTime ? shotTime.toISOString() : null,
+      latitude: shotLatitude,
+      longitude: shotLongitude,
+      gpsAccuracyMeters: shotGpsAccuracy,
+      azimuthDegrees: shotHeading,
+      cardinalDirection: shotCardinal,
+      elevationAngleDegrees: shotPitch,
+      zoom: currentZoom
+    };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'GipfelPeiler_Aufnahmedaten.json';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1500);
+  }
+
+  document.getElementById('saveData').addEventListener('click', downloadMetadata);
 
   document.getElementById('addName').addEventListener('click', () => {
     namePanel.style.display = 'flex';
