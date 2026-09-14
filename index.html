@@ -316,7 +316,7 @@
   <div id="startPanel">
     <div class="card">
       <h1>GipfelPeiler</h1>
-      <p>Version 2 zeigt das Kamerabild, ein Fadenkreuz, eine feinere Kompassskala und den korrigierten Höhenwinkel. Auf dem iPhone müssen Kamera- und Bewegungssensoren einmal freigegeben werden.</p>
+      <p>Version 3 zeigt das Kamerabild, ein Fadenkreuz, eine feinere Kompassskala und den korrigierten Höhenwinkel. Auf dem iPhone müssen Kamera- und Bewegungssensoren einmal freigegeben werden.</p>
       <button id="startBtn" class="primary">Kamera & Kompass starten</button>
       <div id="status"></div>
     </div>
@@ -325,9 +325,9 @@
   <div id="photoModal">
     <canvas id="captured"></canvas>
     <div class="photoActions">
-      <button class="actionBtn" id="savePlain">Foto ohne Einblendung</button>
-      <button class="actionBtn" id="saveDegrees">Foto mit Grad</button>
-      <button class="actionBtn" id="addName">Gipfelname hinzufügen</button>
+      <button class="actionBtn" id="savePlain">Original</button>
+      <button class="actionBtn" id="saveDegrees">Peilfoto</button>
+      <button class="actionBtn" id="addName">Postfoto</button>
       <button class="actionBtn" id="closePhoto">Zurück</button>
     </div>
   </div>
@@ -366,6 +366,9 @@
   let heading = null;
   let pitch = null;
   let plainFrame = null;
+  let shotHeading = null;
+  let shotPitch = null;
+  let shotCardinal = '';
   let currentZoom = 1;
 
   function cardinal(deg) {
@@ -438,7 +441,7 @@
     if (typeof event.beta === 'number') {
       // In Portrait-Haltung entspricht beta≈90° einer waagerechten Blickrichtung.
       // Positiv = Kamera zeigt über den Horizont, negativ = darunter.
-      pitch = 90 - event.beta;
+      pitch = event.beta - 90;
       if (pitch > 90) pitch -= 180;
       if (pitch < -90) pitch += 180;
       const sign = pitch >= 0 ? '+' : '';
@@ -523,30 +526,54 @@
   function drawBaseFrame() {
     const vw = video.videoWidth;
     const vh = video.videoHeight;
-    if (!vw || !vh) return false;
+    const rect = video.getBoundingClientRect();
+    if (!vw || !vh || !rect.width || !rect.height) return false;
 
-    canvas.width = vw;
-    canvas.height = vh;
-    ctx.drawImage(video, 0, 0, vw, vh);
+    // Die Live-Vorschau verwendet object-fit: cover.
+    // Deshalb schneiden wir den Sensorframe exakt so zu, wie er auf dem Display sichtbar war.
+    const videoAspect = vw / vh;
+    const viewAspect = rect.width / rect.height;
+
+    let sx = 0, sy = 0, sw = vw, sh = vh;
+    if (videoAspect > viewAspect) {
+      sw = vh * viewAspect;
+      sx = (vw - sw) / 2;
+    } else {
+      sh = vw / viewAspect;
+      sy = (vh - sh) / 2;
+    }
+
+    // Ausgabe in hoher Auflösung mit exakt demselben Seitenverhältnis wie die Vorschau.
+    const outW = Math.round(sw);
+    const outH = Math.round(sh);
+
+    canvas.width = outW;
+    canvas.height = outH;
+    ctx.drawImage(video, sx, sy, sw, sh, 0, 0, outW, outH);
 
     plainFrame = document.createElement('canvas');
-    plainFrame.width = vw;
-    plainFrame.height = vh;
-    plainFrame.getContext('2d').drawImage(video, 0, 0, vw, vh);
+    plainFrame.width = outW;
+    plainFrame.height = outH;
+    plainFrame.getContext('2d').drawImage(video, sx, sy, sw, sh, 0, 0, outW, outH);
+
+    // Messwerte exakt zum Auslösezeitpunkt einfrieren.
+    shotHeading = heading;
+    shotPitch = pitch;
+    shotCardinal = heading != null ? cardinal(heading) : '';
     return true;
   }
 
-  function overlayDegrees(targetCtx, w, h, withName = false, name = '') {
+  function overlayPeilung(targetCtx, w, h) {
     const scale = Math.max(1, w / 1200);
     targetCtx.save();
 
-    // Fadenkreuz
-    targetCtx.strokeStyle = 'rgba(255,255,255,.95)';
-    targetCtx.lineWidth = 2 * scale;
-    targetCtx.shadowColor = 'rgba(0,0,0,.8)';
-    targetCtx.shadowBlur = 5 * scale;
     const cx = w / 2, cy = h / 2;
     const arm = 50 * scale;
+
+    targetCtx.strokeStyle = 'rgba(255,255,255,.96)';
+    targetCtx.lineWidth = 2 * scale;
+    targetCtx.shadowColor = 'rgba(0,0,0,.85)';
+    targetCtx.shadowBlur = 5 * scale;
     targetCtx.beginPath();
     targetCtx.moveTo(cx - arm, cy);
     targetCtx.lineTo(cx + arm, cy);
@@ -554,32 +581,58 @@
     targetCtx.lineTo(cx, cy + arm);
     targetCtx.stroke();
 
-    // Gradangabe
-    const text = heading != null ? heading.toFixed(1) + '° ' + cardinal(heading) : '---.-°';
-    targetCtx.font = `700 ${34 * scale}px -apple-system, BlinkMacSystemFont, sans-serif`;
+    const degreeText = shotHeading != null
+      ? shotHeading.toFixed(1) + '° ' + shotCardinal
+      : '---.-°';
+    const pitchText = shotPitch != null
+      ? 'Höhenwinkel ' + (shotPitch >= 0 ? '+' : '') + shotPitch.toFixed(1) + '°'
+      : '';
+
     targetCtx.textAlign = 'center';
     targetCtx.fillStyle = '#fff';
-    targetCtx.fillText(text, cx, cy + 88 * scale);
-
-    if (withName && name.trim()) {
-      targetCtx.font = `600 ${36 * scale}px -apple-system, BlinkMacSystemFont, sans-serif`;
-      targetCtx.textAlign = 'left';
-      const pad = 28 * scale;
-      const y = h - 42 * scale;
-      const metrics = targetCtx.measureText(name.trim());
-      const boxW = metrics.width + pad * 1.4;
-      const boxH = 56 * scale;
-      targetCtx.fillStyle = 'rgba(0,0,0,.52)';
-      targetCtx.fillRect(pad * .6, y - boxH + 12 * scale, boxW, boxH);
-      targetCtx.fillStyle = '#fff';
-      targetCtx.fillText(name.trim(), pad, y);
+    targetCtx.font = `700 ${34 * scale}px -apple-system, BlinkMacSystemFont, sans-serif`;
+    targetCtx.fillText(degreeText, cx, cy + 88 * scale);
+    if (pitchText) {
+      targetCtx.font = `500 ${22 * scale}px -apple-system, BlinkMacSystemFont, sans-serif`;
+      targetCtx.fillText(pitchText, cx, cy + 119 * scale);
     }
+    targetCtx.restore();
+  }
+
+  function overlayPeakName(targetCtx, w, h, name) {
+    if (!name.trim()) return;
+    const scale = Math.max(1, w / 1200);
+    const cx = w / 2, cy = h / 2;
+    targetCtx.save();
+
+    // Postfoto: keine technische Peilung. Der Name wird direkt am angepeilten Punkt platziert.
+    targetCtx.strokeStyle = 'rgba(255,255,255,.95)';
+    targetCtx.fillStyle = '#fff';
+    targetCtx.shadowColor = 'rgba(0,0,0,.9)';
+    targetCtx.shadowBlur = 5 * scale;
+    targetCtx.lineWidth = 2 * scale;
+
+    const lineTop = cy - 62 * scale;
+    const lineBottom = cy - 12 * scale;
+    targetCtx.beginPath();
+    targetCtx.moveTo(cx, lineTop);
+    targetCtx.lineTo(cx, lineBottom);
+    targetCtx.stroke();
+
+    targetCtx.beginPath();
+    targetCtx.arc(cx, cy, 4 * scale, 0, Math.PI * 2);
+    targetCtx.fill();
+
+    targetCtx.font = `600 ${34 * scale}px -apple-system, BlinkMacSystemFont, sans-serif`;
+    targetCtx.textAlign = 'center';
+    targetCtx.textBaseline = 'bottom';
+    targetCtx.fillText(name.trim(), cx, lineTop - 10 * scale);
     targetCtx.restore();
   }
 
   shutter.addEventListener('click', () => {
     if (!drawBaseFrame()) return;
-    overlayDegrees(ctx, canvas.width, canvas.height);
+    overlayPeilung(ctx, canvas.width, canvas.height);
     photoModal.style.display = 'flex';
   });
 
@@ -607,8 +660,8 @@
     temp.height = plainFrame.height;
     const tctx = temp.getContext('2d');
     tctx.drawImage(plainFrame, 0, 0);
-    overlayDegrees(tctx, temp.width, temp.height);
-    downloadCanvas(temp, 'GipfelPeiler_Grad.jpg');
+    overlayPeilung(tctx, temp.width, temp.height);
+    downloadCanvas(temp, 'GipfelPeiler_Peilfoto.jpg');
   });
 
   document.getElementById('addName').addEventListener('click', () => {
@@ -623,7 +676,7 @@
     temp.height = plainFrame.height;
     const tctx = temp.getContext('2d');
     tctx.drawImage(plainFrame, 0, 0);
-    overlayDegrees(tctx, temp.width, temp.height, true, peakNameInput.value);
+    overlayPeakName(tctx, temp.width, temp.height, peakNameInput.value);
     downloadCanvas(temp, 'GipfelPeiler_' + (peakNameInput.value.trim() || 'Gipfel') + '.jpg');
     namePanel.style.display = 'none';
   });
