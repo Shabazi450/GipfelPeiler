@@ -279,7 +279,24 @@
       color: #fff;
       margin: 8px 0;
     }
-  </style>
+  
+    /* V5: fotografischer Sucher. Hochformat 3:4, Querformat 4:3. */
+    #cameraWrap {
+      width: 100vw;
+      height: min(133.333vw, 100dvh);
+      max-height: 100dvh;
+      margin: 0 auto;
+      overflow: hidden;
+    }
+    @media (orientation: landscape) {
+      #cameraWrap {
+        width: min(133.333dvh, 100vw);
+        height: 75vw;
+        max-height: 100dvh;
+      }
+    }
+
+</style>
 </head>
 <body>
 <div id="app">
@@ -317,7 +334,7 @@
   <div id="startPanel">
     <div class="card">
       <h1>GipfelPeiler</h1>
-      <p>Version 4 zeigt das Kamerabild, ein Fadenkreuz, eine feinere Kompassskala und den korrigierten Höhenwinkel. Auf dem iPhone müssen Kamera- und Bewegungssensoren einmal freigegeben werden.</p>
+      <p>Version 5 zeigt das Kamerabild, ein Fadenkreuz, eine feinere Kompassskala und den korrigierten Höhenwinkel. Auf dem iPhone müssen Kamera- und Bewegungssensoren einmal freigegeben werden.</p>
       <button id="startBtn" class="primary">Kamera & Kompass starten</button>
       <div id="status"></div>
     </div>
@@ -448,27 +465,42 @@
       updateTape();
     }
 
-    if (typeof event.beta === 'number' && typeof event.gamma === 'number') {
-      // Kamerablickwinkel aus der Schwerkraftrichtung berechnen.
-      // Funktioniert in Hochformat sowie Querformat links/rechts.
-      const beta = event.beta * Math.PI / 180;
-      const gamma = event.gamma * Math.PI / 180;
-      const screenAngle = (screen.orientation && typeof screen.orientation.angle === 'number')
-        ? screen.orientation.angle
-        : (typeof window.orientation === 'number' ? window.orientation : 0);
+    if (typeof event.alpha === 'number' &&
+        typeof event.beta === 'number' &&
+        typeof event.gamma === 'number') {
 
-      let rawPitch;
-      if (Math.abs(screenAngle) === 90 || Math.abs(screenAngle) === 270) {
-        // Querformat: gamma beschreibt die Kameraneigung wesentlich besser.
-        rawPitch = screenAngle === 90 ? event.gamma : -event.gamma;
+      // Neigungswinkel des optischen Kamera-Blickvektors.
+      // Die Berechnung erfolgt aus der Geräteorientierung und wird anschließend
+      // um die aktuelle Bildschirmrotation korrigiert.
+      const b = event.beta * Math.PI / 180;
+      const g = event.gamma * Math.PI / 180;
+
+      // Z-Komponente des horizontalen Blickvektors der Rückkamera in Weltkoordinaten.
+      // Für Portrait ist beta=90° ungefähr Horizont; in Landscape übernimmt gamma.
+      const angle = (screen.orientation && typeof screen.orientation.angle === 'number')
+        ? ((screen.orientation.angle % 360) + 360) % 360
+        : (((typeof window.orientation === 'number' ? window.orientation : 0) % 360) + 360) % 360;
+
+      let p;
+      if (angle === 90) {
+        p = 90 - Math.abs(event.gamma);
+        // Vorzeichen anhand der Querformat-Neigung
+        if (event.gamma < 0) p = -p;
+      } else if (angle === 270) {
+        p = 90 - Math.abs(event.gamma);
+        if (event.gamma > 0) p = -p;
+      } else if (angle === 180) {
+        p = 90 - Math.abs(event.beta);
+        if (event.beta > 0) p = -p;
       } else {
-        // Hochformat
-        rawPitch = event.beta - 90;
+        p = event.beta - 90;
       }
 
-      pitch = rawPitch;
-      if (pitch > 90) pitch -= 180;
-      if (pitch < -90) pitch += 180;
+      // Normalisieren und auf sinnvollen Kamera-Höhenwinkel begrenzen.
+      while (p > 90) p -= 180;
+      while (p < -90) p += 180;
+      pitch = p;
+
       const sign = pitch >= 0 ? '+' : '';
       pitchEl.textContent = 'Höhenwinkel: ' + sign + pitch.toFixed(1) + '°';
     }
@@ -576,24 +608,23 @@
   function drawBaseFrame() {
     const vw = video.videoWidth;
     const vh = video.videoHeight;
-    const rect = video.getBoundingClientRect();
-    if (!vw || !vh || !rect.width || !rect.height) return false;
+    if (!vw || !vh) return false;
 
-    // Die Live-Vorschau verwendet object-fit: cover.
-    // Deshalb schneiden wir den Sensorframe exakt so zu, wie er auf dem Display sichtbar war.
-    const videoAspect = vw / vh;
-    const viewAspect = rect.width / rect.height;
+    const landscape = window.matchMedia('(orientation: landscape)').matches;
+    const targetAspect = landscape ? (4 / 3) : (3 / 4);
+    const sensorAspect = vw / vh;
 
     let sx = 0, sy = 0, sw = vw, sh = vh;
-    if (videoAspect > viewAspect) {
-      sw = vh * viewAspect;
+
+    // Zentrierter Crop auf exakt denselben Fotoausschnitt wie der 4:3/3:4-Sucher.
+    if (sensorAspect > targetAspect) {
+      sw = vh * targetAspect;
       sx = (vw - sw) / 2;
     } else {
-      sh = vw / viewAspect;
+      sh = vw / targetAspect;
       sy = (vh - sh) / 2;
     }
 
-    // Ausgabe in hoher Auflösung mit exakt demselben Seitenverhältnis wie die Vorschau.
     const outW = Math.round(sw);
     const outH = Math.round(sh);
 
@@ -606,7 +637,6 @@
     plainFrame.height = outH;
     plainFrame.getContext('2d').drawImage(video, sx, sy, sw, sh, 0, 0, outW, outH);
 
-    // Messwerte exakt zum Auslösezeitpunkt einfrieren.
     shotHeading = heading;
     shotPitch = pitch;
     shotCardinal = heading != null ? cardinal(heading) : '';
@@ -656,9 +686,9 @@
     targetCtx.fillStyle = '#fff';
     targetCtx.shadowColor = 'rgba(0,0,0,.9)';
     targetCtx.shadowBlur = 5 * scale;
-    targetCtx.font = `700 ${30 * scale}px -apple-system, BlinkMacSystemFont, sans-serif`;
+    targetCtx.font = `600 ${24 * scale}px -apple-system, BlinkMacSystemFont, sans-serif`;
     targetCtx.fillText(degreeText + (pitchText ? '   ·   ' + pitchText : ''), cx, bottomY - 38 * scale);
-    targetCtx.font = `500 ${18 * scale}px -apple-system, BlinkMacSystemFont, sans-serif`;
+    targetCtx.font = `500 ${15 * scale}px -apple-system, BlinkMacSystemFont, sans-serif`;
     targetCtx.fillText(gpsText + (timeText ? '   ·   ' + timeText : ''), cx, bottomY);
     targetCtx.restore();
   }
@@ -683,9 +713,11 @@
     targetCtx.lineTo(cx, lineBottom);
     targetCtx.stroke();
 
+    // Kein Punkt auf dem Gipfel: die Linie endet knapp oberhalb des Peilpunkts.
     targetCtx.beginPath();
-    targetCtx.arc(cx, cy, 4 * scale, 0, Math.PI * 2);
-    targetCtx.fill();
+    targetCtx.moveTo(cx, lineTop);
+    targetCtx.lineTo(cx, cy - 10 * scale);
+    targetCtx.stroke();
 
     targetCtx.font = `600 ${34 * scale}px -apple-system, BlinkMacSystemFont, sans-serif`;
     targetCtx.textAlign = 'center';
