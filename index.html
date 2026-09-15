@@ -9,6 +9,7 @@
   <meta name="apple-mobile-web-app-title" content="GipfelPeiler" />
   <link rel="manifest" href="manifest.json" />
   <title>GipfelPeiler</title>
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@6.9.0/dist/maplibre-gl.css" />
   <style>
     :root {
       --safe-top: env(safe-area-inset-top);
@@ -327,6 +328,8 @@
     <button class="zoomBtn" data-zoom="3">3×</button>
   </div>
 
+  <button class="pill" id="terrainBtn">3D</button>
+
   <div class="bottom">
     <button id="shutter" aria-label="Foto aufnehmen"></button>
   </div>
@@ -334,7 +337,7 @@
   <div id="startPanel">
     <div class="card">
       <h1>GipfelPeiler</h1>
-      <p>Version 5 zeigt das Kamerabild, ein Fadenkreuz, eine feinere Kompassskala und den korrigierten Höhenwinkel. Auf dem iPhone müssen Kamera- und Bewegungssensoren einmal freigegeben werden.</p>
+      <p>Version 6 ergänzt eine erste interaktive 3D-Geländeansicht. Die Kamera zeigt weiterhin das Kamerabild, ein Fadenkreuz, eine feinere Kompassskala und den korrigierten Höhenwinkel. Auf dem iPhone müssen Kamera- und Bewegungssensoren einmal freigegeben werden.</p>
       <button id="startBtn" class="primary">Kamera & Kompass starten</button>
       <div id="status"></div>
     </div>
@@ -351,6 +354,13 @@
     </div>
   </div>
 
+  <div id="terrainPanel">
+    <div id="terrainMap"></div>
+    <div id="terrainHud"><div class="pill" id="terrainInfo">3D · Position wird geladen …</div><button id="closeTerrain">Kamera</button></div>
+    <div id="terrainAim"></div>
+    <div id="terrainHint">Ziehen: Blick ändern · Zwei Finger: Zoom/Neigung</div>
+  </div>
+
   <div id="namePanel">
     <div class="card">
       <h2>Gipfelname</h2>
@@ -361,9 +371,16 @@
   </div>
 </div>
 
+<script src="https://unpkg.com/maplibre-gl@6.9.0/dist/maplibre-gl.js"></script>
 <script>
 (() => {
   const video = document.getElementById('video');
+  const terrainBtn = document.getElementById('terrainBtn');
+  const terrainPanel = document.getElementById('terrainPanel');
+  const closeTerrain = document.getElementById('closeTerrain');
+  const terrainInfo = document.getElementById('terrainInfo');
+  let terrainMap = null;
+  let terrainMarker = null;
   const startPanel = document.getElementById('startPanel');
   const startBtn = document.getElementById('startBtn');
   const status = document.getElementById('status');
@@ -584,6 +601,49 @@
   document.querySelectorAll('.zoomBtn').forEach(btn => {
     btn.addEventListener('click', () => applyZoom(Number(btn.dataset.zoom)));
   });
+
+
+  function initTerrainMap() {
+    if (terrainMap) return;
+    if (!window.maplibregl) { alert('3D-Modul konnte nicht geladen werden. Internetverbindung prüfen.'); return; }
+    const lat = latitude ?? 48.2, lon = longitude ?? 8.6;
+    terrainMap = new maplibregl.Map({
+      container: 'terrainMap', center: [lon, lat], zoom: 12.5,
+      pitch: 72, bearing: heading ?? 0, maxPitch: 85,
+      style: {
+        version: 8,
+        sources: {
+          osm: { type:'raster', tiles:['https://tile.openstreetmap.org/{z}/{x}/{y}.png'], tileSize:256, maxzoom:19, attribution:'© OpenStreetMap-Mitwirkende' },
+          terrainSource: { type:'raster-dem', url:'https://tiles.mapterhorn.com/tilejson.json' },
+          hillshadeSource: { type:'raster-dem', url:'https://tiles.mapterhorn.com/tilejson.json' }
+        },
+        layers: [
+          { id:'osm', type:'raster', source:'osm' },
+          { id:'hills', type:'hillshade', source:'hillshadeSource', paint:{'hillshade-exaggeration':0.45} }
+        ],
+        terrain: { source:'terrainSource', exaggeration:1 }
+      }
+    });
+    terrainMap.addControl(new maplibregl.NavigationControl({visualizePitch:true, showCompass:true}), 'bottom-right');
+    terrainMap.on('load', () => updateTerrainView(true));
+  }
+
+  function updateTerrainView(first=false) {
+    if (!terrainMap || latitude == null || longitude == null) return;
+    const bearing = heading ?? terrainMap.getBearing();
+    const opts = { center:[longitude, latitude], bearing, pitch:72, zoom:12.5 };
+    first ? terrainMap.jumpTo(opts) : terrainMap.easeTo({...opts, duration:650});
+    if (!terrainMarker) terrainMarker = new maplibregl.Marker({color:'#ffffff'}).setLngLat([longitude, latitude]).addTo(terrainMap);
+    else terrainMarker.setLngLat([longitude, latitude]);
+    terrainInfo.textContent = `3D · ${bearing.toFixed(1)}° ${cardinal(bearing)} · GPS ±${gpsAccuracy != null ? Math.round(gpsAccuracy) : '?'} m`;
+  }
+
+  terrainBtn.addEventListener('click', () => {
+    terrainPanel.style.display = 'block';
+    initTerrainMap();
+    setTimeout(() => { if (terrainMap) { terrainMap.resize(); updateTerrainView(true); } }, 100);
+  });
+  closeTerrain.addEventListener('click', () => { terrainPanel.style.display = 'none'; });
 
   startBtn.addEventListener('click', async () => {
     status.textContent = 'Berechtigungen werden angefordert …';
