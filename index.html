@@ -556,8 +556,7 @@
             lastTerrainHeading = heading;
             // Nur die Blickrichtung nachführen. Dadurch bleibt ein per Pinch gewählter Zoom erhalten.
             if (terrainMap && terrainMode === 'look' && Number.isFinite(cachedGroundHeight)) {
-              terrainMap.setBearing(heading);
-              terrainInfo.textContent = `3D Blick · ${heading.toFixed(1)}° ${cardinal(heading)} · Zoom bleibt erhalten`;
+              setLookView(heading);
             } else {
               updateTerrainView(false);
             }
@@ -769,33 +768,46 @@
   }
 
   function setLookView(bearing) {
-    // Beobachter ca. 2 m über dem DEM. Die zuletzt bekannte Bodenhöhe wird zwischengespeichert.
+    // V6.7: echte Beobachterkamera wie bei einem Panorama-Sucher.
+    // Die Kamera selbst steht am GPS-Punkt auf DEM-Höhe + Augenhöhe;
+    // der Standort ist NICHT mehr das Ziel/Center der Kartenkamera.
     const q = terrainMap.queryTerrainElevation([longitude, latitude], {exaggerated:false});
     if (Number.isFinite(q)) { cachedGroundHeight = q; demRetryCount = 0; }
     const ground = Number.isFinite(q) ? q : cachedGroundHeight;
-    if (ground == null || !Number.isFinite(ground) || !terrainMap.getFreeCameraOptions) {
-      // Nur einmal in eine tile-freundliche Ausgangslage gehen; keine Endlosschleife mehr.
-      if (demRetryCount === 0) terrainMap.jumpTo({center:[longitude,latitude], bearing, pitch:78, zoom:13.2});
-      terrainInfo.textContent = `3D Blick · DEM wird geladen · ${bearing.toFixed(1)}° ${cardinal(bearing)}`;
-      if (!demRetryTimer && demRetryCount < 8) {
+
+    if (!Number.isFinite(ground)) {
+      // Nur zum Laden der lokalen DEM-Kacheln kurz von oben auf den Standort schauen.
+      if (demRetryCount === 0) terrainMap.jumpTo({center:[longitude,latitude], bearing, pitch:72, zoom:13.5});
+      terrainInfo.textContent = `3D Blick · Standort-Höhe wird geladen · ${bearing.toFixed(1)}° ${cardinal(bearing)}`;
+      if (!demRetryTimer && demRetryCount < 10) {
         demRetryCount++;
-        demRetryTimer=setTimeout(()=>{ demRetryTimer=null; if(terrainMode==='look') updateTerrainView(false); },450);
+        demRetryTimer=setTimeout(()=>{ demRetryTimer=null; if(terrainMode==='look') updateTerrainView(false); },400);
       }
       return;
     }
-    const eyeAlt = ground + 2.0;
-    const target = destinationPoint(latitude, longitude, bearing, 6000);
-    const targetGround = terrainMap.queryTerrainElevation(target, {exaggerated:false});
-    const targetAlt = Number.isFinite(targetGround) ? targetGround : ground;
+
+    const eyeAlt = ground + 1.7;
     try {
-      const cam=terrainMap.getFreeCameraOptions();
-      cam.position=maplibregl.MercatorCoordinate.fromLngLat([longitude,latitude], eyeAlt);
-      cam.lookAtPoint(target, targetAlt);
-      terrainMap.setFreeCameraOptions(cam);
-      terrainInfo.textContent = `3D Blick · ${bearing.toFixed(1)}° ${cardinal(bearing)} · Augenhöhe ${Math.round(eyeAlt)} m`;
+      // MapLibre berechnet hier die Kartenparameter AUS der realen Kameraposition.
+      // pitch 90° = waagerechter Blick zum Horizont; bearing = iPhone-Kompass.
+      if (typeof terrainMap.calculateCameraOptionsFromCameraLngLatAltRotation === 'function') {
+        const opts = terrainMap.calculateCameraOptionsFromCameraLngLatAltRotation(
+          new maplibregl.LngLat(longitude, latitude), eyeAlt, bearing, 90, 0
+        );
+        terrainMap.jumpTo(opts);
+      } else {
+        // Fallback für ältere MapLibre-Versionen: FreeCamera mit korrekter Position
+        // und einem Zielpunkt in gleicher Augenhöhe vor dem Beobachter.
+        const target = destinationPoint(latitude, longitude, bearing, 10000);
+        const cam = terrainMap.getFreeCameraOptions();
+        cam.position = maplibregl.MercatorCoordinate.fromLngLat([longitude,latitude], eyeAlt);
+        cam.lookAtPoint(target);
+        terrainMap.setFreeCameraOptions(cam);
+      }
+      terrainInfo.textContent = `3D Blick · ${bearing.toFixed(1)}° ${cardinal(bearing)} · Standortkamera ${Math.round(eyeAlt)} m`;
     } catch(e) {
-      console.warn('FreeCamera Fallback',e);
-      terrainMap.easeTo({center:[longitude,latitude], bearing, pitch:85, zoom:14.5, duration:500});
+      console.warn('Standortkamera Fehler',e);
+      terrainInfo.textContent = '3D Blick · Kamerafehler: ' + (e.message || e).slice(0,70);
     }
   }
 
@@ -838,7 +850,7 @@
   document.querySelectorAll('.terrainMode').forEach(btn=>btn.addEventListener('click',()=>{
     terrainMode=btn.dataset.mode;
     document.querySelectorAll('.terrainMode').forEach(b=>b.classList.toggle('active',b===btn));
-    terrainHint.textContent = terrainMode==='look' ? 'Automatik: Kompass steuert Blick · Pinch zum Zoomen' : 'Frei: Ziehen/Drehen · bis 85° Richtung Horizont';
+    terrainHint.textContent = terrainMode==='look' ? 'Standortkamera: Kompass steuert Horizontblick' : 'Frei: Ziehen/Drehen · bis 85° Richtung Horizont';
     if (demRetryTimer) { clearTimeout(demRetryTimer); demRetryTimer=null; }
     demRetryCount=0;
     updateTerrainView(true);
