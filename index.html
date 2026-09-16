@@ -463,6 +463,11 @@
   let stream = null;
   let facingMode = 'environment';
   let heading = null;
+  let terrainHeadingTimer = null;
+  let lastTerrainHeading = null;
+  let cachedGroundHeight = null;
+  let demRetryTimer = null;
+  let demRetryCount = 0;
   let pitch = null;
   let plainFrame = null;
   let shotHeading = null;
@@ -542,6 +547,17 @@
       cardinalEl.textContent = cardinal(h);
       sensorStatus.textContent = 'Kompass: aktiv';
       updateTape();
+      // Im 3D-Blick folgt die virtuelle Kamera dem Kompass, aber gedrosselt.
+      if (terrainMap && terrainMode === 'look' && terrainPanel.style.display !== 'none') {
+        const diff = lastTerrainHeading == null ? 999 : Math.abs(((h-lastTerrainHeading+540)%360)-180);
+        if (diff >= 1.0 && !terrainHeadingTimer) {
+          terrainHeadingTimer = setTimeout(() => {
+            terrainHeadingTimer = null;
+            lastTerrainHeading = heading;
+            updateTerrainView(false);
+          }, 180);
+        }
+      }
     }
 
     if (typeof event.alpha === 'number' &&
@@ -747,12 +763,18 @@
   }
 
   function setLookView(bearing) {
-    // Beobachter ca. 2 m über dem DEM. FreeCamera erzeugt eine echte bodennahe Sicht.
-    const ground = terrainMap.queryTerrainElevation([longitude, latitude], {exaggerated:false});
+    // Beobachter ca. 2 m über dem DEM. Die zuletzt bekannte Bodenhöhe wird zwischengespeichert.
+    const q = terrainMap.queryTerrainElevation([longitude, latitude], {exaggerated:false});
+    if (Number.isFinite(q)) { cachedGroundHeight = q; demRetryCount = 0; }
+    const ground = Number.isFinite(q) ? q : cachedGroundHeight;
     if (ground == null || !Number.isFinite(ground) || !terrainMap.getFreeCameraOptions) {
-      terrainMap.easeTo({center:[longitude,latitude], bearing, pitch:85, zoom:14.5, duration:500});
-      terrainInfo.textContent = `3D Blick · DEM-Höhe wird geladen · ${bearing.toFixed(1)}° ${cardinal(bearing)}`;
-      setTimeout(()=>{ if(terrainMode==='look') updateTerrainView(true); },700);
+      // Nur einmal in eine tile-freundliche Ausgangslage gehen; keine Endlosschleife mehr.
+      if (demRetryCount === 0) terrainMap.jumpTo({center:[longitude,latitude], bearing, pitch:78, zoom:13.2});
+      terrainInfo.textContent = `3D Blick · DEM wird geladen · ${bearing.toFixed(1)}° ${cardinal(bearing)}`;
+      if (!demRetryTimer && demRetryCount < 8) {
+        demRetryCount++;
+        demRetryTimer=setTimeout(()=>{ demRetryTimer=null; if(terrainMode==='look') updateTerrainView(false); },450);
+      }
       return;
     }
     const eyeAlt = ground + 2.0;
@@ -771,6 +793,21 @@
     }
   }
 
+  function configureTerrainInteractions() {
+    if (!terrainMap) return;
+    const look = terrainMode === 'look';
+    // Blickmodus: App steuert Position, Richtung und Neigung. Pinch-Zoom bleibt erlaubt.
+    if (terrainMap.dragPan) look ? terrainMap.dragPan.disable() : terrainMap.dragPan.enable();
+    if (terrainMap.dragRotate) look ? terrainMap.dragRotate.disable() : terrainMap.dragRotate.enable();
+    if (terrainMap.keyboard) look ? terrainMap.keyboard.disable() : terrainMap.keyboard.enable();
+    if (terrainMap.touchPitch) look ? terrainMap.touchPitch.disable() : terrainMap.touchPitch.enable();
+    if (terrainMap.touchZoomRotate) {
+      terrainMap.touchZoomRotate.enable();
+      if (look && terrainMap.touchZoomRotate.disableRotation) terrainMap.touchZoomRotate.disableRotation();
+      if (!look && terrainMap.touchZoomRotate.enableRotation) terrainMap.touchZoomRotate.enableRotation();
+    }
+  }
+
   function setBirdView(bearing) {
     terrainMap.easeTo({center:[longitude,latitude], bearing, pitch:72, zoom:11.5, duration:550});
     terrainInfo.textContent = `3D Vogel · ${bearing.toFixed(1)}° ${cardinal(bearing)} · Relief 1,5×`;
@@ -779,6 +816,7 @@
   function updateTerrainView(first=false) {
     if (!terrainMap) return;
     if (latitude == null || longitude == null) { terrainInfo.textContent='3D · GPS-Position noch nicht verfügbar'; return; }
+    configureTerrainInteractions();
     const bearing=heading ?? terrainMap.getBearing();
     if (!terrainMarker) terrainMarker=new maplibregl.Marker({color:'#ffffff'}).setLngLat([longitude,latitude]).addTo(terrainMap);
     else terrainMarker.setLngLat([longitude,latitude]);
@@ -788,18 +826,21 @@
   document.querySelectorAll('.terrainMode').forEach(btn=>btn.addEventListener('click',()=>{
     terrainMode=btn.dataset.mode;
     document.querySelectorAll('.terrainMode').forEach(b=>b.classList.toggle('active',b===btn));
-    terrainHint.textContent = terrainMode==='look' ? 'Blickrichtung folgt dem Kompass · Ziehen zum Prüfen' : 'Ziehen: Blick ändern · Zwei Finger: Zoom/Neigung';
+    terrainHint.textContent = terrainMode==='look' ? 'Automatik: Kompass steuert Blick · Pinch zum Zoomen' : 'Frei: Ziehen/Drehen · Zwei Finger: Zoom/Neigung';
+    if (demRetryTimer) { clearTimeout(demRetryTimer); demRetryTimer=null; }
+    demRetryCount=0;
     updateTerrainView(true);
   }));
 
   terrainBtn.addEventListener('click', () => {
     terrainPanel.style.display = 'block';
+    demRetryCount=0;
     const ok = initTerrainMap();
     requestAnimationFrame(() => requestAnimationFrame(() => {
       if (ok && terrainMap) { terrainMap.resize(); updateTerrainView(true); }
     }));
   });
-  closeTerrain.addEventListener('click', () => { terrainPanel.style.display = 'none'; });
+  closeTerrain.addEventListener('click', () => { terrainPanel.style.display = 'none'; if(demRetryTimer){clearTimeout(demRetryTimer);demRetryTimer=null;} });
 
   startBtn.addEventListener('click', async () => {
     status.textContent = 'Berechtigungen werden angefordert …';
