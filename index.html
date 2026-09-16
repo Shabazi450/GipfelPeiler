@@ -554,7 +554,13 @@
           terrainHeadingTimer = setTimeout(() => {
             terrainHeadingTimer = null;
             lastTerrainHeading = heading;
-            updateTerrainView(false);
+            // Nur die Blickrichtung nachführen. Dadurch bleibt ein per Pinch gewählter Zoom erhalten.
+            if (terrainMap && terrainMode === 'look' && Number.isFinite(cachedGroundHeight)) {
+              terrainMap.setBearing(heading);
+              terrainInfo.textContent = `3D Blick · ${heading.toFixed(1)}° ${cardinal(heading)} · Zoom bleibt erhalten`;
+            } else {
+              updateTerrainView(false);
+            }
           }, 180);
         }
       }
@@ -809,8 +815,8 @@
   }
 
   function setBirdView(bearing) {
-    terrainMap.easeTo({center:[longitude,latitude], bearing, pitch:72, zoom:11.5, duration:550});
-    terrainInfo.textContent = `3D Vogel · ${bearing.toFixed(1)}° ${cardinal(bearing)} · Relief 1,5×`;
+    terrainMap.easeTo({center:[longitude,latitude], bearing, pitch:84, zoom:11.5, duration:550});
+    terrainInfo.textContent = `3D Vogel · ${bearing.toFixed(1)}° ${cardinal(bearing)} · Horizontmodus · Relief 1,5×`;
   }
 
   function updateTerrainView(first=false) {
@@ -818,15 +824,21 @@
     if (latitude == null || longitude == null) { terrainInfo.textContent='3D · GPS-Position noch nicht verfügbar'; return; }
     configureTerrainInteractions();
     const bearing=heading ?? terrainMap.getBearing();
-    if (!terrainMarker) terrainMarker=new maplibregl.Marker({color:'#ffffff'}).setLngLat([longitude,latitude]).addTo(terrainMap);
-    else terrainMarker.setLngLat([longitude,latitude]);
-    if (terrainMode==='look') setLookView(bearing); else setBirdView(bearing);
+    if (terrainMode === 'look') {
+      // Im Blickmodus IST die Kamera der Standort; ein Standort-Pin vor dem Beobachter wäre irreführend.
+      if (terrainMarker) { terrainMarker.remove(); terrainMarker = null; }
+      setLookView(bearing);
+    } else {
+      if (!terrainMarker) terrainMarker=new maplibregl.Marker({color:'#ffffff'}).setLngLat([longitude,latitude]).addTo(terrainMap);
+      else terrainMarker.setLngLat([longitude,latitude]);
+      setBirdView(bearing);
+    }
   }
 
   document.querySelectorAll('.terrainMode').forEach(btn=>btn.addEventListener('click',()=>{
     terrainMode=btn.dataset.mode;
     document.querySelectorAll('.terrainMode').forEach(b=>b.classList.toggle('active',b===btn));
-    terrainHint.textContent = terrainMode==='look' ? 'Automatik: Kompass steuert Blick · Pinch zum Zoomen' : 'Frei: Ziehen/Drehen · Zwei Finger: Zoom/Neigung';
+    terrainHint.textContent = terrainMode==='look' ? 'Automatik: Kompass steuert Blick · Pinch zum Zoomen' : 'Frei: Ziehen/Drehen · bis 85° Richtung Horizont';
     if (demRetryTimer) { clearTimeout(demRetryTimer); demRetryTimer=null; }
     demRetryCount=0;
     updateTerrainView(true);
