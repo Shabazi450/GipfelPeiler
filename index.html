@@ -330,6 +330,14 @@
       pointer-events: auto; border: 1px solid rgba(255,255,255,.35); border-radius: 18px;
       padding: 9px 14px; background: rgba(0,0,0,.7); color: #fff; font-weight: 700;
     }
+    #terrainModes {
+      position:absolute; top:calc(env(safe-area-inset-top, 0px) + 62px); left:50%;
+      transform:translateX(-50%); z-index:111; display:flex; gap:6px;
+      padding:4px; border-radius:18px; background:rgba(0,0,0,.58);
+    }
+    .terrainMode { border:1px solid rgba(255,255,255,.28); border-radius:14px; padding:8px 12px; background:transparent; color:#fff; font-weight:700; }
+    .terrainMode.active { background:rgba(255,255,255,.22); border-color:rgba(255,255,255,.65); }
+
     #terrainAim {
       position: absolute; left: 50%; top: 50%; width: 42px; height: 42px;
       transform: translate(-50%,-50%); z-index: 108; pointer-events: none;
@@ -385,7 +393,7 @@
   <div id="startPanel">
     <div class="card">
       <h1>GipfelPeiler</h1>
-      <p>Version 6.2 trennt Kamera und 3D-Ansicht vollständig und zeigt das 3D-Gelände bildschirmfüllend. Die Kamera zeigt weiterhin das Kamerabild, ein Fadenkreuz, eine feinere Kompassskala und den korrigierten Höhenwinkel. Auf dem iPhone müssen Kamera- und Bewegungssensoren einmal freigegeben werden.</p>
+      <p>Version 6.4 ergänzt zwei 3D-Modi: Beobachterblick und Vogelperspektive. Die Kamera zeigt weiterhin das Kamerabild, ein Fadenkreuz, eine feinere Kompassskala und den korrigierten Höhenwinkel. Auf dem iPhone müssen Kamera- und Bewegungssensoren einmal freigegeben werden.</p>
       <button id="startBtn" class="primary">Kamera & Kompass starten</button>
       <div id="status"></div>
     </div>
@@ -405,6 +413,7 @@
   <div id="terrainPanel">
     <div id="terrainMap"></div>
     <div id="terrainHud"><div class="pill" id="terrainInfo">3D · Position wird geladen …</div><button id="closeTerrain">Kamera</button></div>
+    <div id="terrainModes"><button class="terrainMode active" data-mode="look">3D Blick</button><button class="terrainMode" data-mode="bird">3D Vogel</button></div>
     <div id="terrainAim"></div>
     <div id="terrainHint">Ziehen: Blick ändern · Zwei Finger: Zoom/Neigung</div>
   </div>
@@ -433,6 +442,7 @@
   const terrainInfo = document.getElementById('terrainInfo');
   let terrainMap = null;
   let terrainMarker = null;
+  let terrainMode = 'look';
   const startPanel = document.getElementById('startPanel');
   const startBtn = document.getElementById('startBtn');
   const status = document.getElementById('status');
@@ -729,19 +739,58 @@
     }
   }
 
-  function updateTerrainView(first=false) {
-    if (!terrainMap) return;
-    if (latitude == null || longitude == null) {
-      terrainInfo.textContent = '3D · GPS-Position noch nicht verfügbar';
+  function destinationPoint(lat, lon, bearingDeg, distanceM) {
+    const R=6371000, br=bearingDeg*Math.PI/180, p1=lat*Math.PI/180, l1=lon*Math.PI/180, d=distanceM/R;
+    const p2=Math.asin(Math.sin(p1)*Math.cos(d)+Math.cos(p1)*Math.sin(d)*Math.cos(br));
+    const l2=l1+Math.atan2(Math.sin(br)*Math.sin(d)*Math.cos(p1),Math.cos(d)-Math.sin(p1)*Math.sin(p2));
+    return [l2*180/Math.PI, p2*180/Math.PI];
+  }
+
+  function setLookView(bearing) {
+    // Beobachter ca. 2 m über dem DEM. FreeCamera erzeugt eine echte bodennahe Sicht.
+    const ground = terrainMap.queryTerrainElevation([longitude, latitude], {exaggerated:false});
+    if (ground == null || !Number.isFinite(ground) || !terrainMap.getFreeCameraOptions) {
+      terrainMap.easeTo({center:[longitude,latitude], bearing, pitch:85, zoom:14.5, duration:500});
+      terrainInfo.textContent = `3D Blick · DEM-Höhe wird geladen · ${bearing.toFixed(1)}° ${cardinal(bearing)}`;
+      setTimeout(()=>{ if(terrainMode==='look') updateTerrainView(true); },700);
       return;
     }
-    const bearing = heading ?? terrainMap.getBearing();
-    const opts = { center:[longitude, latitude], bearing, pitch:75, zoom:11.5 };
-    first ? terrainMap.jumpTo(opts) : terrainMap.easeTo({...opts, duration:650});
-    if (!terrainMarker) terrainMarker = new maplibregl.Marker({color:'#ffffff'}).setLngLat([longitude, latitude]).addTo(terrainMap);
-    else terrainMarker.setLngLat([longitude, latitude]);
-    terrainInfo.textContent = `3D · ${bearing.toFixed(1)}° ${cardinal(bearing)} · GPS ±${gpsAccuracy != null ? Math.round(gpsAccuracy) : '?'} m`;
+    const eyeAlt = ground + 2.0;
+    const target = destinationPoint(latitude, longitude, bearing, 6000);
+    const targetGround = terrainMap.queryTerrainElevation(target, {exaggerated:false});
+    const targetAlt = Number.isFinite(targetGround) ? targetGround : ground;
+    try {
+      const cam=terrainMap.getFreeCameraOptions();
+      cam.position=maplibregl.MercatorCoordinate.fromLngLat([longitude,latitude], eyeAlt);
+      cam.lookAtPoint(target, targetAlt);
+      terrainMap.setFreeCameraOptions(cam);
+      terrainInfo.textContent = `3D Blick · ${bearing.toFixed(1)}° ${cardinal(bearing)} · Augenhöhe ${Math.round(eyeAlt)} m`;
+    } catch(e) {
+      console.warn('FreeCamera Fallback',e);
+      terrainMap.easeTo({center:[longitude,latitude], bearing, pitch:85, zoom:14.5, duration:500});
+    }
   }
+
+  function setBirdView(bearing) {
+    terrainMap.easeTo({center:[longitude,latitude], bearing, pitch:72, zoom:11.5, duration:550});
+    terrainInfo.textContent = `3D Vogel · ${bearing.toFixed(1)}° ${cardinal(bearing)} · Relief 1,5×`;
+  }
+
+  function updateTerrainView(first=false) {
+    if (!terrainMap) return;
+    if (latitude == null || longitude == null) { terrainInfo.textContent='3D · GPS-Position noch nicht verfügbar'; return; }
+    const bearing=heading ?? terrainMap.getBearing();
+    if (!terrainMarker) terrainMarker=new maplibregl.Marker({color:'#ffffff'}).setLngLat([longitude,latitude]).addTo(terrainMap);
+    else terrainMarker.setLngLat([longitude,latitude]);
+    if (terrainMode==='look') setLookView(bearing); else setBirdView(bearing);
+  }
+
+  document.querySelectorAll('.terrainMode').forEach(btn=>btn.addEventListener('click',()=>{
+    terrainMode=btn.dataset.mode;
+    document.querySelectorAll('.terrainMode').forEach(b=>b.classList.toggle('active',b===btn));
+    terrainHint.textContent = terrainMode==='look' ? 'Blickrichtung folgt dem Kompass · Ziehen zum Prüfen' : 'Ziehen: Blick ändern · Zwei Finger: Zoom/Neigung';
+    updateTerrainView(true);
+  }));
 
   terrainBtn.addEventListener('click', () => {
     terrainPanel.style.display = 'block';
