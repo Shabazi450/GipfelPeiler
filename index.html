@@ -382,6 +382,18 @@
       background:rgba(0,0,0,.65); color:#fff; font-size:13px; white-space:nowrap; pointer-events:none;
     }
 
+    #terrainTargetControls {
+      position:absolute; right:12px; bottom:calc(env(safe-area-inset-bottom, 0px) + 64px);
+      z-index:114; display:flex; flex-direction:column; gap:8px; align-items:flex-end;
+    }
+    .targetBtn { border:1px solid rgba(255,255,255,.45); border-radius:16px; padding:10px 13px; background:rgba(0,0,0,.68); color:#fff; font-weight:750; }
+    #releaseTarget { display:none; }
+    #targetReadout { display:none; max-width:230px; padding:8px 11px; border-radius:14px; background:rgba(0,0,0,.68); color:#fff; font-size:13px; line-height:1.25; text-align:right; }
+    #cameraTarget { position:absolute; z-index:26; width:24px; height:24px; border:2px solid #ffd84d; border-radius:50%; transform:translate(-50%,-50%); pointer-events:none; display:none; box-shadow:0 0 0 1px rgba(0,0,0,.65); }
+    #cameraTarget::before,#cameraTarget::after { content:''; position:absolute; background:#ffd84d; }
+    #cameraTarget::before { width:34px; height:2px; left:-7px; top:9px; }
+    #cameraTarget::after { width:2px; height:34px; left:9px; top:-7px; }
+
 </style>
 </head>
 <body>
@@ -400,6 +412,7 @@
   </div>
 
   <div id="crosshair"><div class="ring"></div></div>
+  <div id="cameraTarget" title="Gespeichertes 3D-Ziel"></div>
 
   <div id="readout">
     <div id="heading">---.-°</div>
@@ -422,7 +435,7 @@
   <div id="startPanel">
     <div class="card">
       <h1>GipfelPeiler</h1>
-      <p>Version 7.0 ersetzt den bodennahen MapLibre-Blick durch ein stabiles, aus dem Höhenmodell berechnetes 360°-Geländepanorama. Kamera-Zoom und 3D-Vogelansicht bleiben erhalten. Die Kamera zeigt weiterhin das Kamerabild, ein Fadenkreuz, eine feinere Kompassskala und den korrigierten Höhenwinkel. Auf dem iPhone müssen Kamera- und Bewegungssensoren einmal freigegeben werden.</p>
+      <p>Version 7.2 erweitert den bodennahen MapLibre-Blick durch ein stabiles, aus dem Höhenmodell berechnetes 360°-Geländepanorama. Kamera-Zoom und 3D-Vogelansicht bleiben erhalten. Die Kamera zeigt weiterhin das Kamerabild, ein Fadenkreuz, eine feinere Kompassskala und den korrigierten Höhenwinkel. Auf dem iPhone müssen Kamera- und Bewegungssensoren einmal freigegeben werden.</p>
       <button id="startBtn" class="primary">Kamera & Kompass starten</button>
       <div id="status"></div>
     </div>
@@ -445,6 +458,7 @@
     <div id="terrainModes"><button class="terrainMode active" data-mode="look">3D Blick</button><button class="terrainMode" data-mode="bird">3D Vogel</button></div>
     <div id="terrainAim"></div>
     <div id="terrainZoomControls"><button class="terrainZoomBtn active" data-pzoom="1">1×</button><button class="terrainZoomBtn" data-pzoom="2">2×</button><button class="terrainZoomBtn" data-pzoom="3">3×</button></div>
+    <div id="terrainTargetControls"><div id="targetReadout"></div><button class="targetBtn" id="setTarget">Ziel setzen</button><button class="targetBtn" id="releaseTarget">Ziel lösen</button></div>
     <div id="terrainHint">Panorama: iPhone steuert Richtung + Höhenwinkel</div>
   </div>
 
@@ -474,6 +488,8 @@
   const panoCtx = terrainPanorama.getContext('2d');
   let panoramaProfile = null, panoramaBuilding = false;
   let panoramaZoom = 1, panoPinchStartDistance = 0, panoPinchStartZoom = 1;
+  let panoramaMaxZoom = 15;
+  let lockedTarget = null, targetMarker = null;
   let terrainMap = null;
   let terrainMarker = null;
   let terrainMode = 'look';
@@ -493,6 +509,7 @@
   const flipBtn = document.getElementById('flipBtn');
   const namePanel = document.getElementById('namePanel');
   const peakNameInput = document.getElementById('peakName');
+  const setTargetBtn=document.getElementById('setTarget'), releaseTargetBtn=document.getElementById('releaseTarget'), targetReadout=document.getElementById('targetReadout'), cameraTarget=document.getElementById('cameraTarget');
 
   let stream = null;
   let facingMode = 'environment';
@@ -586,6 +603,7 @@
       cardinalEl.textContent = cardinal(h);
       sensorStatus.textContent = 'Kompass: aktiv';
       updateTape();
+      updateCameraTarget();
       // Im 3D-Blick folgt die virtuelle Kamera dem Kompass, aber gedrosselt.
       if (terrainMap && terrainMode === 'look' && terrainPanel.style.display !== 'none') {
         const diff = lastTerrainHeading == null ? 999 : Math.abs(((h-lastTerrainHeading+540)%360)-180);
@@ -638,6 +656,7 @@
 
       const sign = pitch >= 0 ? '+' : '';
       pitchEl.textContent = 'Höhenwinkel: ' + sign + pitch.toFixed(1) + '°';
+      updateCameraTarget();
 
       // V6.8: Auch reines Heben/Senken des iPhones aktualisiert den 3D-Blick.
       if (terrainMap && terrainMode === 'look' && terrainPanel.style.display !== 'none') {
@@ -737,6 +756,7 @@
     // Digitaler Fallback verändert ausschließlich das Kamerabild – nie HUD/Bedienelemente.
     video.style.transformOrigin = '50% 50%';
     video.style.transform = usedHardware ? 'none' : `scale(${currentZoom})`;
+    updateCameraTarget();
     document.querySelectorAll('.zoomBtn').forEach(b =>
       b.classList.toggle('active', Math.abs(Number(b.dataset.zoom) - currentZoom) < 0.15)
     );
@@ -864,6 +884,69 @@
 
   function angleDiff(a,b){ return ((a-b+540)%360)-180; }
 
+  function nearestProfile(az) {
+    if(!panoramaProfile) return null;
+    let best=null, bd=999;
+    for(const q of panoramaProfile){ const d=Math.abs(angleDiff(q.az,az)); if(d<bd){bd=d;best=q;} }
+    return best;
+  }
+
+  function targetScreenPosition(hfov,vfov,w,h) {
+    if(!lockedTarget) return null;
+    const dh=angleDiff(lockedTarget.az, heading ?? 0);
+    const dv=lockedTarget.angle-(pitch ?? 0);
+    return {x:w/2 + dh*(w/hfov), y:h/2 - dv*(h/vfov), dh, dv};
+  }
+
+  function drawLockedTarget(w,h,hfov,vfov) {
+    if(!lockedTarget) return;
+    const pos=targetScreenPosition(hfov,vfov,w,h);
+    if(!pos || pos.x < -30 || pos.x > w+30 || pos.y < -30 || pos.y > h+30) return;
+    panoCtx.save();
+    panoCtx.strokeStyle='#ffd84d'; panoCtx.fillStyle='#ffd84d'; panoCtx.lineWidth=2;
+    panoCtx.beginPath(); panoCtx.arc(pos.x,pos.y,9,0,Math.PI*2); panoCtx.stroke();
+    panoCtx.beginPath(); panoCtx.moveTo(pos.x-15,pos.y); panoCtx.lineTo(pos.x+15,pos.y); panoCtx.moveTo(pos.x,pos.y-15); panoCtx.lineTo(pos.x,pos.y+15); panoCtx.stroke();
+    panoCtx.font='600 13px -apple-system,BlinkMacSystemFont,sans-serif'; panoCtx.textAlign='center'; panoCtx.fillText(`${(lockedTarget.distance/1000).toFixed(1)} km`,pos.x,pos.y-20);
+    panoCtx.restore();
+  }
+
+  function refreshTargetUI(){
+    const has=!!lockedTarget;
+    releaseTargetBtn.style.display=has?'block':'none'; targetReadout.style.display=has?'block':'none';
+    setTargetBtn.textContent=has?'Neues Ziel setzen':'Ziel setzen';
+    if(has) targetReadout.textContent=`Ziel · ${(lockedTarget.distance/1000).toFixed(2)} km · ${lockedTarget.az.toFixed(1)}° ${cardinal(lockedTarget.az)} · ${(lockedTarget.angle>=0?'+':'')}${lockedTarget.angle.toFixed(1)}° · ca. ${Math.round(lockedTarget.elevation)} m`;
+    updateCameraTarget(); updateBirdTarget();
+  }
+
+  function updateCameraTarget(){
+    if(!lockedTarget || terrainPanel.style.display!=='none'){ cameraTarget.style.display='none'; return; }
+    const r=video.getBoundingClientRect(); if(!r.width||!r.height||heading==null||pitch==null){cameraTarget.style.display='none';return;}
+    const hfov=72/currentZoom, vfov=hfov*r.height/r.width, dh=angleDiff(lockedTarget.az,heading), dv=lockedTarget.angle-pitch;
+    if(Math.abs(dh)>hfov/2 || Math.abs(dv)>vfov/2){ cameraTarget.style.display='none'; return; }
+    cameraTarget.style.left=(r.left+r.width/2+dh*(r.width/hfov))+'px'; cameraTarget.style.top=(r.top+r.height/2-dv*(r.height/vfov))+'px'; cameraTarget.style.display='block';
+  }
+
+  function updateBirdTarget(){
+    if(!terrainMap || !lockedTarget || terrainMode!=='bird') { if(targetMarker){targetMarker.remove();targetMarker=null;} return; }
+    if(!targetMarker) targetMarker=new maplibregl.Marker({color:'#ffd84d'}).setLngLat([lockedTarget.lon,lockedTarget.lat]).addTo(terrainMap); else targetMarker.setLngLat([lockedTarget.lon,lockedTarget.lat]);
+    const data={type:'Feature',geometry:{type:'LineString',coordinates:[[longitude,latitude],[lockedTarget.lon,lockedTarget.lat]]}};
+    if(terrainMap.getSource('targetLine')) terrainMap.getSource('targetLine').setData(data);
+    else { terrainMap.addSource('targetLine',{type:'geojson',data}); terrainMap.addLayer({id:'targetLineLayer',type:'line',source:'targetLine',paint:{'line-color':'#ffd84d','line-width':3,'line-dasharray':[2,2]}}); }
+  }
+
+  function setTargetFromAim(){
+    if(!panoramaProfile || heading==null || pitch==null) return;
+    const q=nearestProfile(heading); if(!q || !q.samples || !q.samples.length) return;
+    let best=q.samples[0], bd=999;
+    for(const sm of q.samples){ const d=Math.abs(sm.angle-pitch); if(d<bd){bd=d;best=sm;} }
+    const pt=destinationPoint(latitude,longitude,q.az,best.distance);
+    lockedTarget={az:q.az,angle:best.angle,distance:best.distance,elevation:best.elevation,lon:pt[0],lat:pt[1]};
+    refreshTargetUI(); renderPanorama();
+  }
+
+  setTargetBtn.addEventListener('click',setTargetFromAim);
+  releaseTargetBtn.addEventListener('click',()=>{ lockedTarget=null; if(targetMarker){targetMarker.remove();targetMarker=null;} if(terrainMap&&terrainMap.getSource('targetLine')) terrainMap.getSource('targetLine').setData({type:'FeatureCollection',features:[]}); refreshTargetUI(); if(panoramaProfile)renderPanorama(); });
+
   function renderPanorama() {
     if (!panoramaProfile) return;
     resizePanorama();
@@ -877,8 +960,7 @@
     const pts=[];
     for (let x=0;x<=w;x+=2){
       const az=normalize(centerH + (x/w-.5)*hfov);
-      let best=null, bd=999;
-      for(const q of panoramaProfile){ const d=Math.abs(angleDiff(q.az,az)); if(d<bd){bd=d;best=q;} }
+      const best=nearestProfile(az);
       pts.push([x, yFor(best ? best.angle : -2)]);
     }
     panoCtx.beginPath(); panoCtx.moveTo(0,h);
@@ -892,11 +974,12 @@
     // dezente Höhenlinien für räumlichen Eindruck
     panoCtx.strokeStyle='rgba(255,255,255,.16)'; panoCtx.lineWidth=1;
     for(let off=18;off<150;off+=22){ panoCtx.beginPath(); pts.forEach(([x,y],i)=>i?panoCtx.lineTo(x,y+off):panoCtx.moveTo(x,y+off)); panoCtx.stroke(); }
+    drawLockedTarget(w,h,hfov,vfov);
     terrainInfo.textContent=`3D Blick · ${centerH.toFixed(1)}° ${cardinal(centerH)} · ${(centerV>=0?'+':'')}${centerV.toFixed(1)}° · ${panoramaZoom.toFixed(1)}×`;
   }
 
   function setPanoramaZoom(z) {
-    panoramaZoom = Math.max(1, Math.min(3, z));
+    panoramaZoom = Math.max(1, Math.min(panoramaMaxZoom, z));
     document.querySelectorAll('.terrainZoomBtn').forEach(b =>
       b.classList.toggle('active', Math.abs(Number(b.dataset.pzoom) - panoramaZoom) < 0.15)
     );
@@ -936,16 +1019,16 @@
       const ground=terrainMap.queryTerrainElevation([longitude,latitude],{exaggerated:false});
       if(!Number.isFinite(ground)){ panoramaBuilding=false; setTimeout(buildPanorama,700); return; }
       cachedGroundHeight=ground;
-      const distances=[500,1000,2000,3500,5500,8000,12000,17000,24000,32000];
+      const distances=[150,250,400,600,850,1200,1700,2400,3300,4500,6000,8000,10500,13500,17000,21500,27000,34000,42000,50000];
       const prof=[];
       for(let az=0;az<360;az+=2){
-        let maxA=-12;
+        let maxA=-12, samples=[];
         for(const d of distances){
           const pt=destinationPoint(latitude,longitude,az,d);
           const z=terrainMap.queryTerrainElevation(pt,{exaggerated:false});
-          if(Number.isFinite(z)){ const a=Math.atan2(z-(ground+1.7),d)*180/Math.PI; if(a>maxA) maxA=a; }
+          if(Number.isFinite(z)){ const a=Math.atan2(z-(ground+1.7),d)*180/Math.PI; samples.push({distance:d,elevation:z,angle:a}); if(a>maxA) maxA=a; }
         }
-        prof.push({az,angle:maxA});
+        prof.push({az,angle:maxA,samples});
       }
       panoramaProfile=prof; panoramaBuilding=false; renderPanorama();
     };
@@ -977,6 +1060,7 @@
   function setBirdView(bearing) {
     terrainMap.easeTo({center:[longitude,latitude], bearing, pitch:84, zoom:11.5, duration:550});
     terrainInfo.textContent = `3D Vogel · ${bearing.toFixed(1)}° ${cardinal(bearing)} · Horizontmodus · Relief 1,5×`;
+    setTimeout(updateBirdTarget,100);
   }
 
   function updateTerrainView(first=false) {
@@ -1012,7 +1096,7 @@
       if (ok && terrainMap) { terrainMap.resize(); updateTerrainView(true); }
     }));
   });
-  closeTerrain.addEventListener('click', () => { terrainPanel.style.display = 'none'; if(demRetryTimer){clearTimeout(demRetryTimer);demRetryTimer=null;} });
+  closeTerrain.addEventListener('click', () => { terrainPanel.style.display = 'none'; if(demRetryTimer){clearTimeout(demRetryTimer);demRetryTimer=null;} updateCameraTarget(); });
 
   startBtn.addEventListener('click', async () => {
     status.textContent = 'Berechtigungen werden angefordert …';
