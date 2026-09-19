@@ -8,7 +8,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="GipfelPeiler" />
   <link rel="manifest" href="manifest.json" />
-  <title>GipfelPeiler V6.9</title>
+  <title>GipfelPeiler V7.4</title>
   <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@6.9.0/dist/maplibre-gl.css" />
   <style>
     :root {
@@ -398,6 +398,26 @@
     #cameraTarget::before,#cameraTarget::after { content:''; position:absolute; background:#ffd84d; }
     #cameraTarget::before { width:34px; height:2px; left:-7px; top:9px; }
     #cameraTarget::after { width:2px; height:34px; left:9px; top:-7px; }
+
+    /* V7.4: Hoch-/Querformat. Zustand bleibt beim Drehen erhalten. */
+    @media (orientation: landscape) {
+      .topbar { top: calc(var(--safe-top) + 6px); left: calc(env(safe-area-inset-left) + 10px); right: calc(env(safe-area-inset-right) + 10px); }
+      #compassTape { top: calc(var(--safe-top) + 48px); height: 62px; }
+      #ticks { height:62px; }
+      #terrainBtn { left: calc(env(safe-area-inset-left) + 12px); bottom: calc(var(--safe-bottom) + 18px); }
+
+      #terrainTop { top: calc(var(--safe-top) + 6px); left: calc(env(safe-area-inset-left) + 10px); right: calc(env(safe-area-inset-right) + 10px); }
+      #terrainModes { top: calc(var(--safe-top) + 54px); }
+      #terrainZoomControls { bottom: calc(var(--safe-bottom) + 14px); }
+      #terrainHint { left:auto; right:calc(env(safe-area-inset-right) + 64px); bottom:calc(var(--safe-bottom) + 14px); transform:none; max-width:38%; overflow:hidden; text-overflow:ellipsis; }
+      #terrainTargetControls { left:calc(env(safe-area-inset-left) + 12px); bottom:calc(var(--safe-bottom) + 72px); max-width:36%; }
+      #terrainPanel.bird-mode #terrainTargetControls { left:calc(env(safe-area-inset-left) + 12px); }
+      #targetReadout { max-width:280px; font-size:12px; }
+      .targetBtn { padding:8px 11px; }
+      #terrainAim { width:38px; height:38px; }
+      #terrainAim::before { width:66px; left:-16px; top:16px; }
+      #terrainAim::after { height:66px; left:16px; top:-16px; }
+    }
 
 </style>
 </head>
@@ -1166,6 +1186,31 @@
     }));
   });
   closeTerrain.addEventListener('click', () => { terrainPanel.style.display = 'none'; if(demRetryTimer){clearTimeout(demRetryTimer);demRetryTimer=null;} updateCameraTarget(); });
+
+  // V7.4: Nach einer 90°-Drehung keine Ansicht neu aufbauen. Nur Geometrie neu messen
+  // und bestehende Zustände (Modus, Zoom, Ziel, Karte) weiterverwenden.
+  let orientationLayoutTimer=null;
+  function refreshAfterOrientationChange(){
+    if(orientationLayoutTimer) clearTimeout(orientationLayoutTimer);
+    orientationLayoutTimer=setTimeout(()=>{
+      orientationLayoutTimer=null;
+      if(terrainPanel.style.display !== 'none'){
+        if(terrainMode==='look' && panoramaProfile){
+          resizePanorama();
+          renderPanorama();
+        } else if(terrainMap){
+          terrainMap.resize();
+          updateBirdTarget();
+        }
+      }
+      updateCameraTarget();
+    },180);
+  }
+  window.addEventListener('orientationchange', refreshAfterOrientationChange);
+  window.addEventListener('resize', refreshAfterOrientationChange);
+  if(screen.orientation && screen.orientation.addEventListener){
+    screen.orientation.addEventListener('change', refreshAfterOrientationChange);
+  }
 
   startBtn.addEventListener('click', async () => {
     status.textContent = 'Berechtigungen werden angefordert …';
