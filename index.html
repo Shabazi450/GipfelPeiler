@@ -306,8 +306,10 @@
     }
     #diagPanel{position:absolute;left:12px;bottom:150px;z-index:30;background:rgba(0,0,0,.72);color:#fff;border:1px solid rgba(255,255,255,.35);border-radius:14px;padding:9px 11px;font:600 12px/1.35 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;white-space:pre;pointer-events:none;min-width:210px;backdrop-filter:blur(6px)}
     #diagPanel .diagTitle{font-size:13px;margin-bottom:3px;color:#ffd34d}
+    #calibrateBtn{position:absolute;left:12px;bottom:235px;z-index:31;background:rgba(18,18,18,.82)}
     @media (orientation: landscape) {
       #diagPanel{left:12px;bottom:12px;min-width:230px;font-size:11px}
+      #calibrateBtn{left:12px;bottom:145px}
       #cameraWrap {
         width: min(133.333dvh, 100vw);
         height: 75vw;
@@ -477,17 +479,18 @@
   </div>
 
   <button class="pill" id="terrainBtn">3D</button>
+  <button class="pill" id="calibrateBtn">Nord kalibrieren</button>
 
   <div class="bottom">
     <button id="shutter" aria-label="Foto aufnehmen"></button>
   </div>
 
-  <div id="diagPanel"><div class="diagTitle">V7.10 DIAG · Rohsensoren</div><div id="diagValues">warte auf Sensoren …</div></div>
+  <div id="diagPanel"><div class="diagTitle">V7.11 DIAG · Nordkalibrierung</div><div id="diagValues">warte auf Sensoren …</div></div>
 
   <div id="startPanel">
     <div class="card">
       <h1>GipfelPeiler</h1>
-      <p>Version 7.10 DIAG zeigt die unveränderten iPhone-Sensorwerte für die Kompassprüfung. Bitte denselben Zielpunkt einmal im Hoch- und einmal im Querformat anpeilen und jeweils einen Screenshot erstellen. Die eigentliche Peilberechnung wird in dieser Diagnoseversion bewusst noch nicht korrigiert.</p>
+      <p>Version 7.11 DIAG kalibriert die stabile räumliche Kameraachse auf eine bekannte Kompassrichtung. Ziel anpeilen, „Nord kalibrieren“ drücken und den mit echtem Kompass bzw. Kompass-App gemessenen Winkel eingeben. Danach Hoch- und Querformat vergleichen.</p>
       <button id="startBtn" class="primary">Kamera & Kompass starten</button>
       <div id="status"></div>
     </div>
@@ -553,6 +556,7 @@
   const pitchEl = document.getElementById('pitch');
   const sensorStatus = document.getElementById('sensorStatus');
   const diagValues = document.getElementById('diagValues');
+  const calibrateBtn = document.getElementById('calibrateBtn');
   const gpsStatus = document.getElementById('gpsStatus');
   const ticks = document.getElementById('ticks');
   const shutter = document.getElementById('shutter');
@@ -640,10 +644,11 @@
     });
   }
 
-  // V7.9: Kamera-Peilrichtung aus einer Rotationsmatrix.
-  // Der iOS-Kompass dient nur als Nordreferenz; Roll/Pitch kommen aus der
-  // vollständigen Geräteorientierung. Eine reine Bildschirmdrehung darf die
-  // optische Achse der Rückkamera deshalb nicht verändern.
+  // V7.11 DIAG: stabile Kameraachse + einmalige Nordkalibrierung.
+  // Wichtig: webkitCompassHeading wird NICHT mehr laufend in die Peilung gemischt.
+  // Die aus alpha/beta/gamma berechnete optische Achse ist beim Rollen des iPhones
+  // stabil. Ein einmal ermittelter Nord-Offset verankert sie an einer bekannten
+  // Kompassrichtung und bleibt beim Wechsel Hoch/Quer unverändert.
   function getScreenAngle() {
     if (typeof window.orientation === 'number') return ((window.orientation % 360) + 360) % 360;
     if (screen.orientation && typeof screen.orientation.angle === 'number') return ((screen.orientation.angle % 360) + 360) % 360;
@@ -655,19 +660,15 @@
   function rx(a){const c=Math.cos(a),q=Math.sin(a);return [[1,0,0],[0,c,-q],[0,q,c]];}
   function ry(a){const c=Math.cos(a),q=Math.sin(a);return [[c,0,q],[0,1,0],[-q,0,c]];}
   function bearingOf(v){return normalize(Math.atan2(v[0],v[1])*180/Math.PI);}
-  function cameraPose(alphaDeg,betaDeg,gammaDeg,compassDeg){
+  function rawCameraPose(alphaDeg,betaDeg,gammaDeg){
     const d=Math.PI/180;
     const R=matMul(matMul(rz(alphaDeg*d),rx(betaDeg*d)),ry(gammaDeg*d));
-    const sa=getScreenAngle()*d;
-    const screenUp=[-Math.sin(sa),Math.cos(sa),0];
-    const topWorld=matVec(R,screenUp);
     const camWorld=matVec(R,[0,0,-1]);
-    let corr=0;
-    if(isFinite(compassDeg)&&Math.hypot(topWorld[0],topWorld[1])>0.08) corr=((compassDeg-bearingOf(topWorld)+540)%360)-180;
-    const a=corr*d,c=Math.cos(a),q=Math.sin(a);
-    const x=c*camWorld[0]-q*camWorld[1], y=q*camWorld[0]+c*camWorld[1], z=camWorld[2];
-    return {heading:bearingOf([x,y,z]),pitch:Math.atan2(z,Math.hypot(x,y))*180/Math.PI};
+    return {heading:bearingOf(camWorld),pitch:Math.atan2(camWorld[2],Math.hypot(camWorld[0],camWorld[1]))*180/Math.PI};
   }
+  let northOffset = (()=>{const v=parseFloat(localStorage.getItem('gpNorthOffsetV711'));return isFinite(v)?v:null;})();
+  let lastRawHeading=null;
+  function calibratedHeading(raw){ return northOffset==null ? raw : normalize(raw+northOffset); }
   function fmtDiag(v){ return (typeof v==='number' && isFinite(v)) ? v.toFixed(1)+'°' : '–'; }
   function updateDiag(event, pose){
     const wh=(typeof event.webkitCompassHeading==='number'&&isFinite(event.webkitCompassHeading))?event.webkitCompassHeading:null;
@@ -683,7 +684,9 @@
       'beta:           '+fmtDiag(b)+'\n'+
       'gamma:          '+fmtDiag(g)+'\n'+
       'screenAngle:    '+sa+'° ('+ori+')\n'+
-      'calc heading:   '+fmtDiag(pose&&pose.heading)+'\n'+
+      'raw camera:     '+fmtDiag(pose&&pose.heading)+'\n'+
+      'north offset:   '+(northOffset==null?'NICHT KALIBRIERT':fmtDiag(northOffset))+'\n'+
+      'final heading:  '+fmtDiag(pose&&calibratedHeading(pose.heading))+'\n'+
       'calc pitch:     '+fmtDiag(pose&&pose.pitch)+'\n'+
       'accuracy:       '+(acc==null?'–':acc.toFixed(1)+'°');
   }
@@ -691,12 +694,13 @@
     const alpha=(typeof event.alpha==='number'&&isFinite(event.alpha))?event.alpha:0;
     const beta=(typeof event.beta==='number'&&isFinite(event.beta))?event.beta:null;
     const gamma=(typeof event.gamma==='number'&&isFinite(event.gamma))?event.gamma:null;
-    const compass=(typeof event.webkitCompassHeading==='number'&&isFinite(event.webkitCompassHeading))?event.webkitCompassHeading:NaN;
     if(beta==null||gamma==null)return;
-    const pose=cameraPose(alpha,beta,gamma,compass);
+    const pose=rawCameraPose(alpha,beta,gamma);
+    lastRawHeading=pose.heading;
     updateDiag(event, pose);
-    if(isFinite(pose.heading)){
-      const h=pose.heading; heading=h; headingEl.textContent=h.toFixed(1)+'°'; cardinalEl.textContent=cardinal(h); sensorStatus.textContent='Kompass: aktiv'; updateTape(); updateCameraTarget();
+    const h=calibratedHeading(pose.heading);
+    if(isFinite(h)){
+      heading=h; headingEl.textContent=h.toFixed(1)+'°'; cardinalEl.textContent=cardinal(h); sensorStatus.textContent=northOffset==null?'Kompass: kalibrieren':'Kompass: kalibriert'; updateTape(); updateCameraTarget();
       if(terrainMap&&terrainMode==='look'&&terrainPanel.style.display!=='none'){const diff=lastTerrainHeading==null?999:Math.abs(((h-lastTerrainHeading+540)%360)-180);if(diff>=1&&!terrainHeadingTimer)terrainHeadingTimer=setTimeout(()=>{terrainHeadingTimer=null;lastTerrainHeading=heading;if(panoramaProfile)renderPanorama();else updateTerrainView(false);},180);}
     }
     if(isFinite(pose.pitch)){
@@ -704,6 +708,19 @@
       if(terrainMap&&terrainMode==='look'&&terrainPanel.style.display!=='none'){const pdiff=lastTerrainPitch==null?999:Math.abs(pitch-lastTerrainPitch);if(pdiff>=0.6&&!terrainPitchTimer)terrainPitchTimer=setTimeout(()=>{terrainPitchTimer=null;lastTerrainPitch=pitch;if(panoramaProfile)renderPanorama();},120);}
     }
   }
+  calibrateBtn.addEventListener('click',()=>{
+    if(lastRawHeading==null){alert('Noch keine Sensordaten. Kamera & Kompass zuerst starten.');return;}
+    const old = heading!=null ? heading.toFixed(1) : '';
+    const txt=prompt('Bekannte Kompassrichtung des aktuell angepeilten Punktes in Grad (0–359,9):', old);
+    if(txt==null)return;
+    const ref=parseFloat(String(txt).replace(',','.'));
+    if(!isFinite(ref)||ref<0||ref>=360){alert('Bitte einen Winkel zwischen 0 und 359,9° eingeben.');return;}
+    northOffset=normalize(ref-lastRawHeading);
+    if(northOffset>180) northOffset-=360;
+    localStorage.setItem('gpNorthOffsetV711',String(northOffset));
+    heading=normalize(lastRawHeading+northOffset);
+    headingEl.textContent=heading.toFixed(1)+'°'; cardinalEl.textContent=cardinal(heading); sensorStatus.textContent='Kompass: kalibriert'; updateTape(); updateCameraTarget();
+  });
 
   function startGPS() {
     if (!navigator.geolocation) {
