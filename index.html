@@ -383,9 +383,14 @@
     }
 
     #terrainTargetControls {
-      position:absolute; right:12px; bottom:calc(env(safe-area-inset-bottom, 0px) + 64px);
-      z-index:114; display:flex; flex-direction:column; gap:8px; align-items:flex-end;
+      position:absolute; left:12px; bottom:calc(env(safe-area-inset-bottom, 0px) + 64px);
+      z-index:114; display:flex; flex-direction:column; gap:8px; align-items:flex-start; max-width:58%;
     }
+    #terrainPanel.bird-mode #terrainTargetControls { left:12px; right:auto; align-items:flex-start; }
+    #terrainPanel.bird-mode #targetReadout { text-align:left; }
+    #terrainPanel.bird-mode #setTarget { display:none !important; }
+    #gotoTarget { display:none; }
+    #terrainPanel.bird-mode #gotoTarget.has-target { display:block; }
     .targetBtn { border:1px solid rgba(255,255,255,.45); border-radius:16px; padding:10px 13px; background:rgba(0,0,0,.68); color:#fff; font-weight:750; }
     #releaseTarget { display:none; }
     #targetReadout { display:none; max-width:230px; padding:8px 11px; border-radius:14px; background:rgba(0,0,0,.68); color:#fff; font-size:13px; line-height:1.25; text-align:right; }
@@ -435,7 +440,7 @@
   <div id="startPanel">
     <div class="card">
       <h1>GipfelPeiler</h1>
-      <p>Version 7.2 erweitert den bodennahen MapLibre-Blick durch ein stabiles, aus dem Höhenmodell berechnetes 360°-Geländepanorama. Kamera-Zoom und 3D-Vogelansicht bleiben erhalten. Die Kamera zeigt weiterhin das Kamerabild, ein Fadenkreuz, eine feinere Kompassskala und den korrigierten Höhenwinkel. Auf dem iPhone müssen Kamera- und Bewegungssensoren einmal freigegeben werden.</p>
+      <p>Version 7.3 erweitert den bodennahen MapLibre-Blick durch ein stabiles, aus dem Höhenmodell berechnetes 360°-Geländepanorama. Kamera-Zoom und 3D-Vogelansicht bleiben erhalten. Die Kamera zeigt weiterhin das Kamerabild, ein Fadenkreuz, eine feinere Kompassskala und den korrigierten Höhenwinkel. Auf dem iPhone müssen Kamera- und Bewegungssensoren einmal freigegeben werden.</p>
       <button id="startBtn" class="primary">Kamera & Kompass starten</button>
       <div id="status"></div>
     </div>
@@ -458,7 +463,7 @@
     <div id="terrainModes"><button class="terrainMode active" data-mode="look">3D Blick</button><button class="terrainMode" data-mode="bird">3D Vogel</button></div>
     <div id="terrainAim"></div>
     <div id="terrainZoomControls"><button class="terrainZoomBtn active" data-pzoom="1">1×</button><button class="terrainZoomBtn" data-pzoom="2">2×</button><button class="terrainZoomBtn" data-pzoom="3">3×</button></div>
-    <div id="terrainTargetControls"><div id="targetReadout"></div><button class="targetBtn" id="setTarget">Ziel setzen</button><button class="targetBtn" id="releaseTarget">Ziel lösen</button></div>
+    <div id="terrainTargetControls"><div id="targetReadout"></div><button class="targetBtn" id="setTarget">Ziel setzen</button><button class="targetBtn" id="gotoTarget">Zum Ziel</button><button class="targetBtn" id="releaseTarget">Ziel lösen</button></div>
     <div id="terrainHint">Panorama: iPhone steuert Richtung + Höhenwinkel</div>
   </div>
 
@@ -509,7 +514,7 @@
   const flipBtn = document.getElementById('flipBtn');
   const namePanel = document.getElementById('namePanel');
   const peakNameInput = document.getElementById('peakName');
-  const setTargetBtn=document.getElementById('setTarget'), releaseTargetBtn=document.getElementById('releaseTarget'), targetReadout=document.getElementById('targetReadout'), cameraTarget=document.getElementById('cameraTarget');
+  const setTargetBtn=document.getElementById('setTarget'), releaseTargetBtn=document.getElementById('releaseTarget'), gotoTargetBtn=document.getElementById('gotoTarget'), targetReadout=document.getElementById('targetReadout'), cameraTarget=document.getElementById('cameraTarget');
 
   let stream = null;
   let facingMode = 'environment';
@@ -849,6 +854,7 @@
 
       terrainMap.on('load', () => {
         terrainInfo.textContent = '3D · DEM geladen';
+        bindBirdLongPress();
         updateTerrainView(true);
       });
 
@@ -872,6 +878,33 @@
     const p2=Math.asin(Math.sin(p1)*Math.cos(d)+Math.cos(p1)*Math.sin(d)*Math.cos(br));
     const l2=l1+Math.atan2(Math.sin(br)*Math.sin(d)*Math.cos(p1),Math.cos(d)-Math.sin(p1)*Math.sin(p2));
     return [l2*180/Math.PI, p2*180/Math.PI];
+  }
+
+  function distanceBearing(lat1,lon1,lat2,lon2) {
+    const R=6371000, p1=lat1*Math.PI/180, p2=lat2*Math.PI/180, dp=(lat2-lat1)*Math.PI/180, dl=(lon2-lon1)*Math.PI/180;
+    const a=Math.sin(dp/2)**2+Math.cos(p1)*Math.cos(p2)*Math.sin(dl/2)**2;
+    const distance=2*R*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
+    const y=Math.sin(dl)*Math.cos(p2), x=Math.cos(p1)*Math.sin(p2)-Math.sin(p1)*Math.cos(p2)*Math.cos(dl);
+    const az=normalize(Math.atan2(y,x)*180/Math.PI);
+    return {distance,az};
+  }
+
+  function setTargetFromMap(lngLat) {
+    if(!terrainMap || latitude==null || longitude==null || !lngLat) return;
+    const lon=lngLat.lng, lat=lngLat.lat;
+    const db=distanceBearing(latitude,longitude,lat,lon);
+    let ground=cachedGroundHeight;
+    if(!Number.isFinite(ground)) ground=terrainMap.queryTerrainElevation([longitude,latitude],{exaggerated:false});
+    let z=terrainMap.queryTerrainElevation([lon,lat],{exaggerated:false});
+    if(!Number.isFinite(ground) || !Number.isFinite(z)) {
+      terrainInfo.textContent='3D Vogel · Geländehöhe am Ziel noch nicht geladen – kurz warten und erneut halten';
+      return;
+    }
+    cachedGroundHeight=ground;
+    const angle=Math.atan2(z-(ground+1.7),Math.max(1,db.distance))*180/Math.PI;
+    lockedTarget={az:db.az,angle,distance:db.distance,elevation:z,lon,lat,source:'bird'};
+    refreshTargetUI(); updateBirdTarget();
+    terrainInfo.textContent=`3D Vogel · Ziel ${ (db.distance/1000).toFixed(2) } km · ${db.az.toFixed(1)}° ${cardinal(db.az)}`;
   }
 
   function resizePanorama() {
@@ -913,7 +946,7 @@
   function refreshTargetUI(){
     const has=!!lockedTarget;
     releaseTargetBtn.style.display=has?'block':'none'; targetReadout.style.display=has?'block':'none';
-    setTargetBtn.textContent=has?'Neues Ziel setzen':'Ziel setzen';
+    setTargetBtn.textContent=has?'Neues Ziel setzen':'Ziel setzen'; gotoTargetBtn.classList.toggle('has-target',has);
     if(has) targetReadout.textContent=`Ziel · ${(lockedTarget.distance/1000).toFixed(2)} km · ${lockedTarget.az.toFixed(1)}° ${cardinal(lockedTarget.az)} · ${(lockedTarget.angle>=0?'+':'')}${lockedTarget.angle.toFixed(1)}° · ca. ${Math.round(lockedTarget.elevation)} m`;
     updateCameraTarget(); updateBirdTarget();
   }
@@ -946,6 +979,39 @@
 
   setTargetBtn.addEventListener('click',setTargetFromAim);
   releaseTargetBtn.addEventListener('click',()=>{ lockedTarget=null; if(targetMarker){targetMarker.remove();targetMarker=null;} if(terrainMap&&terrainMap.getSource('targetLine')) terrainMap.getSource('targetLine').setData({type:'FeatureCollection',features:[]}); refreshTargetUI(); if(panoramaProfile)renderPanorama(); });
+
+  gotoTargetBtn.addEventListener('click',()=>{
+    if(!terrainMap || !lockedTarget || latitude==null || longitude==null) return;
+    const bounds=new maplibregl.LngLatBounds();
+    bounds.extend([longitude,latitude]); bounds.extend([lockedTarget.lon,lockedTarget.lat]);
+    terrainMap.fitBounds(bounds,{padding:{top:130,bottom:150,left:70,right:90},duration:700,maxZoom:13});
+    setTimeout(()=>terrainMap.easeTo({pitch:72,bearing:lockedTarget.az,duration:450}),720);
+  });
+
+  let birdHoldTimer=null, birdHoldStart=null;
+  const mapCanvas=()=>terrainMap && terrainMap.getCanvas();
+  function cancelBirdHold(){ if(birdHoldTimer){clearTimeout(birdHoldTimer);birdHoldTimer=null;} birdHoldStart=null; }
+  function armBirdHold(e){
+    if(terrainMode!=='bird' || !terrainMap) return;
+    const t=e.touches?e.touches[0]:e; if(!t) return;
+    birdHoldStart={x:t.clientX,y:t.clientY};
+    birdHoldTimer=setTimeout(()=>{
+      birdHoldTimer=null;
+      const rect=mapCanvas().getBoundingClientRect();
+      const point=[birdHoldStart.x-rect.left,birdHoldStart.y-rect.top];
+      setTargetFromMap(terrainMap.unproject(point));
+      if(navigator.vibrate) navigator.vibrate(35);
+    },650);
+  }
+  function moveBirdHold(e){
+    if(!birdHoldTimer||!birdHoldStart) return; const t=e.touches?e.touches[0]:e; if(!t) return;
+    if(Math.hypot(t.clientX-birdHoldStart.x,t.clientY-birdHoldStart.y)>12) cancelBirdHold();
+  }
+  function bindBirdLongPress(){
+    const c=mapCanvas(); if(!c || c.dataset.longPressBound) return; c.dataset.longPressBound='1';
+    c.addEventListener('touchstart',armBirdHold,{passive:true}); c.addEventListener('touchmove',moveBirdHold,{passive:true}); c.addEventListener('touchend',cancelBirdHold,{passive:true}); c.addEventListener('touchcancel',cancelBirdHold,{passive:true});
+    c.addEventListener('pointerdown',e=>{if(e.pointerType==='mouse')armBirdHold(e)}); c.addEventListener('pointermove',e=>{if(e.pointerType==='mouse')moveBirdHold(e)}); c.addEventListener('pointerup',cancelBirdHold); c.addEventListener('pointercancel',cancelBirdHold);
+  }
 
   function renderPanorama() {
     if (!panoramaProfile) return;
@@ -1082,7 +1148,9 @@
   document.querySelectorAll('.terrainMode').forEach(btn=>btn.addEventListener('click',()=>{
     terrainMode=btn.dataset.mode;
     document.querySelectorAll('.terrainMode').forEach(b=>b.classList.toggle('active',b===btn));
-    terrainHint.textContent = terrainMode==='look' ? 'Standortkamera: iPhone steuert Richtung + Höhenwinkel' : 'Frei: Ziehen/Drehen · flacher Blick bis zum Horizont';
+    terrainPanel.classList.toggle('bird-mode',terrainMode==='bird');
+    terrainHint.textContent = terrainMode==='look' ? 'Standortkamera: iPhone steuert Richtung + Höhenwinkel' : 'Frei bewegen · Ziel: gewünschten Punkt 0,7 s gedrückt halten';
+    refreshTargetUI();
     if (demRetryTimer) { clearTimeout(demRetryTimer); demRetryTimer=null; }
     demRetryCount=0;
     updateTerrainView(true);
@@ -1090,6 +1158,7 @@
 
   terrainBtn.addEventListener('click', () => {
     terrainPanel.style.display = 'block';
+    terrainPanel.classList.toggle('bird-mode',terrainMode==='bird');
     demRetryCount=0;
     const ok = initTerrainMap();
     requestAnimationFrame(() => requestAnimationFrame(() => {
