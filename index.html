@@ -422,6 +422,23 @@
       #terrainAim { width:38px; height:38px; }
       #terrainAim::before { width:66px; left:-16px; top:16px; }
       #terrainAim::after { height:66px; left:16px; top:-16px; }
+
+      /* V7.8: Kamera-Bedienung im Querformat aus der Bildmitte nehmen. */
+      .bottom {
+        left:auto;
+        right:calc(env(safe-area-inset-right) + 18px);
+        top:50%;
+        bottom:auto;
+        transform:translateY(-50%);
+        width:auto;
+      }
+      #shutter { width:64px; height:64px; }
+      #zoomControls {
+        bottom:calc(var(--safe-bottom) + 16px);
+        left:50%;
+        transform:translateX(-50%);
+      }
+      #readout { top:50%; }
     }
 
 </style>
@@ -465,7 +482,7 @@
   <div id="startPanel">
     <div class="card">
       <h1>GipfelPeiler</h1>
-      <p>Version 7.5 erweitert den bodennahen MapLibre-Blick durch ein stabiles, aus dem Höhenmodell berechnetes 360°-Geländepanorama. Kamera-Zoom und 3D-Vogelansicht bleiben erhalten. Die Kamera zeigt weiterhin das Kamerabild, ein Fadenkreuz, eine feinere Kompassskala und den korrigierten Höhenwinkel. Auf dem iPhone müssen Kamera- und Bewegungssensoren einmal freigegeben werden.</p>
+      <p>Version 7.8 stabilisiert den bodennahen MapLibre-Blick durch ein stabiles, aus dem Höhenmodell berechnetes 360°-Geländepanorama. Kamera-Zoom und 3D-Vogelansicht bleiben erhalten. Die Kamera zeigt weiterhin das Kamerabild, ein Fadenkreuz, eine feinere Kompassskala und den korrigierten Höhenwinkel. Auf dem iPhone müssen Kamera- und Bewegungssensoren einmal freigegeben werden.</p>
       <button id="startBtn" class="primary">Kamera & Kompass starten</button>
       <div id="status"></div>
     </div>
@@ -617,16 +634,18 @@
     });
   }
 
-  // V7.7: stabile Sensorlogik.
+  // V7.8: stabile Sensorlogik mit Bildschirmrotations-Korrektur.
   // Azimut kommt direkt vom iOS-Kompass; die Bildschirmdrehung darf ihn nicht
   // aus einem Euler-Vektor neu berechnen. Nur der Höhenwinkel wird abhängig
   // von Portrait/Landscape aus beta/gamma abgeleitet.
   function getScreenAngle() {
-    if (screen.orientation && typeof screen.orientation.angle === 'number') {
-      return ((screen.orientation.angle % 360) + 360) % 360;
-    }
+    // iOS Safari: window.orientation tracks the physical screen rotation more
+    // reliably than Screen Orientation while browser chrome is visible.
     if (typeof window.orientation === 'number') {
       return ((window.orientation % 360) + 360) % 360;
+    }
+    if (screen.orientation && typeof screen.orientation.angle === 'number') {
+      return ((screen.orientation.angle % 360) + 360) % 360;
     }
     return 0;
   }
@@ -655,9 +674,13 @@
   function handleOrientation(event) {
     let h = null;
     if (typeof event.webkitCompassHeading === 'number' && isFinite(event.webkitCompassHeading)) {
-      h = normalize(event.webkitCompassHeading);
+      // webkitCompassHeading follows the top edge of the device. When the
+      // screen is rotated, the camera optical axis stays fixed but the top
+      // edge rotates by 90/270 degrees. Compensate by the screen angle so the
+      // same real target keeps the same azimuth in portrait and landscape.
+      h = normalize(event.webkitCompassHeading + getScreenAngle());
     } else if (typeof event.alpha === 'number' && isFinite(event.alpha)) {
-      h = normalize(360 - event.alpha);
+      h = normalize(360 - event.alpha + getScreenAngle());
     }
 
     if (h != null) {
