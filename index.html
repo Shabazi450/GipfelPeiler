@@ -329,6 +329,11 @@
       min-height: 100dvh;
       background: #18232b;
     }
+
+    #terrainPanorama {
+      position:absolute; inset:0; width:100%; height:100%; z-index:103;
+      display:none; background:linear-gradient(#74bdf2 0%,#cfeaff 56%,#eef4ef 100%);
+    }
     #terrainHud {
       position: absolute;
       top: calc(env(safe-area-inset-top, 0px) + 12px);
@@ -408,7 +413,7 @@
   <div id="startPanel">
     <div class="card">
       <h1>GipfelPeiler</h1>
-      <p>Version 6.9 stabilisiert den 3D-Blick auf Basis der funktionierenden Terrain-Darstellung und ergänzt echten Kamera-Pinch-Zoom ohne Seitenvergrößerung. Die Kamera zeigt weiterhin das Kamerabild, ein Fadenkreuz, eine feinere Kompassskala und den korrigierten Höhenwinkel. Auf dem iPhone müssen Kamera- und Bewegungssensoren einmal freigegeben werden.</p>
+      <p>Version 7.0 ersetzt den bodennahen MapLibre-Blick durch ein stabiles, aus dem Höhenmodell berechnetes 360°-Geländepanorama. Kamera-Zoom und 3D-Vogelansicht bleiben erhalten. Die Kamera zeigt weiterhin das Kamerabild, ein Fadenkreuz, eine feinere Kompassskala und den korrigierten Höhenwinkel. Auf dem iPhone müssen Kamera- und Bewegungssensoren einmal freigegeben werden.</p>
       <button id="startBtn" class="primary">Kamera & Kompass starten</button>
       <div id="status"></div>
     </div>
@@ -426,11 +431,11 @@
   </div>
 
   <div id="terrainPanel">
-    <div id="terrainMap"></div>
+    <div id="terrainMap"></div><canvas id="terrainPanorama"></canvas>
     <div id="terrainHud"><div class="pill" id="terrainInfo">3D · Position wird geladen …</div><button id="closeTerrain">Kamera</button></div>
     <div id="terrainModes"><button class="terrainMode active" data-mode="look">3D Blick</button><button class="terrainMode" data-mode="bird">3D Vogel</button></div>
     <div id="terrainAim"></div>
-    <div id="terrainHint">Ziehen: Blick ändern · Zwei Finger: Zoom/Neigung</div>
+    <div id="terrainHint">Panorama: iPhone steuert Richtung + Höhenwinkel</div>
   </div>
 
   <div id="namePanel">
@@ -455,6 +460,9 @@
   const terrainPanel = document.getElementById('terrainPanel');
   const closeTerrain = document.getElementById('closeTerrain');
   const terrainInfo = document.getElementById('terrainInfo');
+  const terrainPanorama = document.getElementById('terrainPanorama');
+  const panoCtx = terrainPanorama.getContext('2d');
+  let panoramaProfile = null, panoramaBuilding = false;
   let terrainMap = null;
   let terrainMarker = null;
   let terrainMode = 'look';
@@ -575,11 +583,7 @@
             terrainHeadingTimer = null;
             lastTerrainHeading = heading;
             // Nur die Blickrichtung nachführen. Dadurch bleibt ein per Pinch gewählter Zoom erhalten.
-            if (terrainMap && terrainMode === 'look' && Number.isFinite(cachedGroundHeight)) {
-              setLookView(heading, pitch ?? 0);
-            } else {
-              updateTerrainView(false);
-            }
+            if (terrainMode === 'look' && panoramaProfile) renderPanorama(); else updateTerrainView(false);
           }, 180);
         }
       }
@@ -625,13 +629,13 @@
       pitchEl.textContent = 'Höhenwinkel: ' + sign + pitch.toFixed(1) + '°';
 
       // V6.8: Auch reines Heben/Senken des iPhones aktualisiert den 3D-Blick.
-      if (terrainMap && terrainMode === 'look' && terrainPanel.style.display !== 'none' && Number.isFinite(cachedGroundHeight)) {
+      if (terrainMap && terrainMode === 'look' && terrainPanel.style.display !== 'none') {
         const pdiff = lastTerrainPitch == null ? 999 : Math.abs(pitch - lastTerrainPitch);
         if (pdiff >= 0.6 && !terrainPitchTimer) {
           terrainPitchTimer = setTimeout(() => {
             terrainPitchTimer = null;
             lastTerrainPitch = pitch;
-            setLookView(heading ?? terrainMap.getBearing(), pitch);
+            if (panoramaProfile) renderPanorama();
           }, 120);
         }
       }
@@ -839,62 +843,81 @@
     return [l2*180/Math.PI, p2*180/Math.PI];
   }
 
-  function setLookView(bearing, elevationAngle = 0) {
-    // V6.7: echte Beobachterkamera wie bei einem Panorama-Sucher.
-    // Die Kamera selbst steht am GPS-Punkt auf DEM-Höhe + Augenhöhe;
-    // der Standort ist NICHT mehr das Ziel/Center der Kartenkamera.
-    const q = terrainMap.queryTerrainElevation([longitude, latitude], {exaggerated:false});
-    if (Number.isFinite(q)) { cachedGroundHeight = q; demRetryCount = 0; }
-    const ground = Number.isFinite(q) ? q : cachedGroundHeight;
-
-    if (!Number.isFinite(ground)) {
-      // Nur zum Laden der lokalen DEM-Kacheln kurz von oben auf den Standort schauen.
-      if (demRetryCount === 0) terrainMap.jumpTo({center:[longitude,latitude], bearing, pitch:72, zoom:13.5});
-      terrainInfo.textContent = `3D Blick · Standort-Höhe wird geladen · ${bearing.toFixed(1)}° ${cardinal(bearing)}`;
-      if (!demRetryTimer && demRetryCount < 10) {
-        demRetryCount++;
-        demRetryTimer=setTimeout(()=>{ demRetryTimer=null; if(terrainMode==='look') updateTerrainView(false); },400);
-      }
-      return;
-    }
-
-    // Im Blickmodus wird das Relief bewusst 1:1 dargestellt. Nur so entspricht
-    // DEM-Höhe + 1,7 m auch optisch einer echten Augenhöhe über dem Gelände.
-    // Technischer Sicherheitsabstand über dem DEM verhindert Clipping/Texture-Wände.
-    // Dies ist nur die Renderkamera; die Peilrechnung bleibt am realen Standort.
-    const eyeAlt = ground + 12;
-    const viewPitch = Math.max(55, Math.min(115, 90 + (Number.isFinite(elevationAngle) ? elevationAngle : 0)));
-    try {
-      // MapLibre: 90° = Horizont. Werte <90 schauen nach unten, >90 nach oben.
-      // Der Höhenwinkel aus der Kamera wird daher direkt auf 90° addiert.
-      if (typeof terrainMap.calculateCameraOptionsFromCameraLngLatAltRotation === 'function') {
-        const opts = terrainMap.calculateCameraOptionsFromCameraLngLatAltRotation(
-          new maplibregl.LngLat(longitude, latitude), eyeAlt, bearing, viewPitch, 0
-        );
-        terrainMap.jumpTo(opts);
-      } else {
-        // Fallback für ältere MapLibre-Versionen: FreeCamera mit korrekter Position
-        // und einem Zielpunkt in gleicher Augenhöhe vor dem Beobachter.
-        const target = destinationPoint(latitude, longitude, bearing, 10000);
-        const cam = terrainMap.getFreeCameraOptions();
-        cam.position = maplibregl.MercatorCoordinate.fromLngLat([longitude,latitude], eyeAlt);
-        cam.lookAtPoint(target);
-        terrainMap.setFreeCameraOptions(cam);
-      }
-      const ev = Number.isFinite(elevationAngle) ? elevationAngle : 0;
-      const es = ev >= 0 ? '+' : '';
-      terrainInfo.textContent = `3D Blick · ${bearing.toFixed(1)}° ${cardinal(bearing)} · ${es}${ev.toFixed(1)}° · stabiler Standortblick`;
-    } catch(e) {
-      console.warn('Standortkamera Fehler',e);
-      terrainInfo.textContent = '3D Blick · Kamerafehler: ' + (e.message || e).slice(0,70);
-    }
+  function resizePanorama() {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const r = terrainPanorama.getBoundingClientRect();
+    terrainPanorama.width = Math.max(1, Math.round(r.width*dpr));
+    terrainPanorama.height = Math.max(1, Math.round(r.height*dpr));
+    panoCtx.setTransform(dpr,0,0,dpr,0,0);
   }
+
+  function angleDiff(a,b){ return ((a-b+540)%360)-180; }
+
+  function renderPanorama() {
+    if (!panoramaProfile) return;
+    resizePanorama();
+    const w=terrainPanorama.clientWidth, h=terrainPanorama.clientHeight;
+    const centerH=heading ?? 0, centerV=pitch ?? 0;
+    const hfov=72, vfov=hfov*h/w;
+    const yFor=a => h/2 - (a-centerV)*(h/vfov);
+    const grad=panoCtx.createLinearGradient(0,0,0,h);
+    grad.addColorStop(0,'#6db8ee'); grad.addColorStop(.58,'#d9efff'); grad.addColorStop(1,'#eef2e8');
+    panoCtx.fillStyle=grad; panoCtx.fillRect(0,0,w,h);
+    const pts=[];
+    for (let x=0;x<=w;x+=2){
+      const az=normalize(centerH + (x/w-.5)*hfov);
+      let best=null, bd=999;
+      for(const q of panoramaProfile){ const d=Math.abs(angleDiff(q.az,az)); if(d<bd){bd=d;best=q;} }
+      pts.push([x, yFor(best ? best.angle : -2)]);
+    }
+    panoCtx.beginPath(); panoCtx.moveTo(0,h);
+    for(const [x,y] of pts) panoCtx.lineTo(x,Math.max(-20,Math.min(h+20,y)));
+    panoCtx.lineTo(w,h); panoCtx.closePath();
+    const land=panoCtx.createLinearGradient(0,h*.45,0,h);
+    land.addColorStop(0,'#647d58'); land.addColorStop(.35,'#879b70'); land.addColorStop(1,'#c8c4a2');
+    panoCtx.fillStyle=land; panoCtx.fill();
+    panoCtx.strokeStyle='rgba(45,60,42,.85)'; panoCtx.lineWidth=1.2; panoCtx.beginPath();
+    pts.forEach(([x,y],i)=> i?panoCtx.lineTo(x,y):panoCtx.moveTo(x,y)); panoCtx.stroke();
+    // dezente Höhenlinien für räumlichen Eindruck
+    panoCtx.strokeStyle='rgba(255,255,255,.16)'; panoCtx.lineWidth=1;
+    for(let off=18;off<150;off+=22){ panoCtx.beginPath(); pts.forEach(([x,y],i)=>i?panoCtx.lineTo(x,y+off):panoCtx.moveTo(x,y+off)); panoCtx.stroke(); }
+    terrainInfo.textContent=`3D Blick · ${centerH.toFixed(1)}° ${cardinal(centerH)} · ${(centerV>=0?'+':'')}${centerV.toFixed(1)}° · DEM-Panorama`;
+  }
+
+  function buildPanorama() {
+    if (!terrainMap || latitude==null || longitude==null || panoramaBuilding) return;
+    panoramaBuilding=true; panoramaProfile=null;
+    terrainInfo.textContent='3D Blick · Geländeprofil wird berechnet …';
+    const b=0.32;
+    terrainMap.fitBounds([[longitude-b,latitude-b],[longitude+b,latitude+b]],{padding:10,pitch:0,bearing:0,duration:0});
+    const run=()=>{
+      const ground=terrainMap.queryTerrainElevation([longitude,latitude],{exaggerated:false});
+      if(!Number.isFinite(ground)){ panoramaBuilding=false; setTimeout(buildPanorama,700); return; }
+      cachedGroundHeight=ground;
+      const distances=[500,1000,2000,3500,5500,8000,12000,17000,24000,32000];
+      const prof=[];
+      for(let az=0;az<360;az+=2){
+        let maxA=-12;
+        for(const d of distances){
+          const pt=destinationPoint(latitude,longitude,az,d);
+          const z=terrainMap.queryTerrainElevation(pt,{exaggerated:false});
+          if(Number.isFinite(z)){ const a=Math.atan2(z-(ground+1.7),d)*180/Math.PI; if(a>maxA) maxA=a; }
+        }
+        prof.push({az,angle:maxA});
+      }
+      panoramaProfile=prof; panoramaBuilding=false; renderPanorama();
+    };
+    terrainMap.once('idle',run);
+    setTimeout(()=>{ if(panoramaBuilding && !panoramaProfile) run(); },1800);
+  }
+
+  function setLookView() { if (panoramaProfile) renderPanorama(); else buildPanorama(); }
 
   function configureTerrainInteractions() {
     if (!terrainMap) return;
     const look = terrainMode === 'look';
-    // V6.9: stabile Terrain-Darstellung wie in V6.7. Das Relief bleibt 1,5×;
-    // die exakte Peilgeometrie wird getrennt von der reinen 3D-Darstellung behandelt.
+    terrainPanorama.style.display = look ? 'block' : 'none';
+    document.getElementById('terrainMap').style.opacity = look ? '0' : '1';
     try { terrainMap.setTerrain({source:'terrainSource', exaggeration: 1.5}); } catch(e) {}
     // Blickmodus: App steuert Position, Richtung und Neigung. Pinch-Zoom bleibt erlaubt.
     if (terrainMap.dragPan) look ? terrainMap.dragPan.disable() : terrainMap.dragPan.enable();
@@ -921,7 +944,7 @@
     if (terrainMode === 'look') {
       // Im Blickmodus IST die Kamera der Standort; ein Standort-Pin vor dem Beobachter wäre irreführend.
       if (terrainMarker) { terrainMarker.remove(); terrainMarker = null; }
-      setLookView(bearing, pitch ?? 0);
+      setLookView();
     } else {
       if (!terrainMarker) terrainMarker=new maplibregl.Marker({color:'#ffffff'}).setLngLat([longitude,latitude]).addTo(terrainMap);
       else terrainMarker.setLngLat([longitude,latitude]);
