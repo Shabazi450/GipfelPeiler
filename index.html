@@ -617,14 +617,50 @@
     });
   }
 
-  function handleOrientation(event) {
-    let h = null;
+  // V7.6: Peilung aus dem optischen Achsvektor der Rueckkamera berechnen.
+  // Dadurch bleibt die Peilung beim Drehen Portrait <-> Landscape invariant:
+  // Bildschirmrotation ist nur ein Rollen des Telefons um die Kameraachse.
+  function cameraVectorFromOrientation(alphaDeg, betaDeg, gammaDeg) {
+    const a = alphaDeg * Math.PI / 180;
+    const b = betaDeg * Math.PI / 180;
+    const g = gammaDeg * Math.PI / 180;
 
-    // iOS Safari liefert webkitCompassHeading direkt bezogen auf Norden.
-    if (typeof event.webkitCompassHeading === 'number') {
-      h = event.webkitCompassHeading;
-    } else if (typeof event.alpha === 'number') {
-      h = normalize(360 - event.alpha);
+    // Rotation nach W3C DeviceOrientation: Rz(alpha) * Rx(beta) * Ry(gamma).
+    // Die Rueckkamera blickt entlang der negativen Geraete-Z-Achse.
+    const east = -(Math.sin(a) * Math.sin(b) * Math.cos(g) + Math.sin(g) * Math.cos(a));
+    const north = -(Math.sin(a) * Math.sin(g) - Math.sin(b) * Math.cos(a) * Math.cos(g));
+    const up = -(Math.cos(b) * Math.cos(g));
+    return { east, north, up };
+  }
+
+  function handleOrientation(event) {
+    const hasEuler = typeof event.alpha === 'number' &&
+                     typeof event.beta === 'number' &&
+                     typeof event.gamma === 'number';
+
+    let h = null;
+    let p = null;
+
+    if (hasEuler) {
+      const v = cameraVectorFromOrientation(event.alpha, event.beta, event.gamma);
+      const horizontal = Math.hypot(v.east, v.north);
+
+      // Magnetische/True-North-Korrektur von iOS uebernehmen, ohne die
+      // Bildschirmkante als Blickrichtung zu verwenden.
+      let northCorrection = 0;
+      if (typeof event.webkitCompassHeading === 'number' && isFinite(event.webkitCompassHeading)) {
+        const alphaHeading = normalize(360 - event.alpha);
+        northCorrection = ((event.webkitCompassHeading - alphaHeading + 540) % 360) - 180;
+      }
+
+      if (horizontal > 0.02) {
+        h = normalize(Math.atan2(v.east, v.north) * 180 / Math.PI + northCorrection);
+      }
+      p = Math.atan2(v.up, horizontal) * 180 / Math.PI;
+    } else {
+      // Fallback fuer Browser ohne vollstaendige Euler-Werte.
+      if (typeof event.webkitCompassHeading === 'number') h = event.webkitCompassHeading;
+      else if (typeof event.alpha === 'number') h = normalize(360 - event.alpha);
     }
 
     if (h != null && isFinite(h)) {
@@ -634,61 +670,24 @@
       sensorStatus.textContent = 'Kompass: aktiv';
       updateTape();
       updateCameraTarget();
-      // Im 3D-Blick folgt die virtuelle Kamera dem Kompass, aber gedrosselt.
       if (terrainMap && terrainMode === 'look' && terrainPanel.style.display !== 'none') {
         const diff = lastTerrainHeading == null ? 999 : Math.abs(((h-lastTerrainHeading+540)%360)-180);
         if (diff >= 1.0 && !terrainHeadingTimer) {
           terrainHeadingTimer = setTimeout(() => {
             terrainHeadingTimer = null;
             lastTerrainHeading = heading;
-            // Nur die Blickrichtung nachführen. Dadurch bleibt ein per Pinch gewählter Zoom erhalten.
             if (terrainMode === 'look' && panoramaProfile) renderPanorama(); else updateTerrainView(false);
           }, 180);
         }
       }
     }
 
-    if (typeof event.alpha === 'number' &&
-        typeof event.beta === 'number' &&
-        typeof event.gamma === 'number') {
-
-      // Neigungswinkel des optischen Kamera-Blickvektors.
-      // Die Berechnung erfolgt aus der Geräteorientierung und wird anschließend
-      // um die aktuelle Bildschirmrotation korrigiert.
-      const b = event.beta * Math.PI / 180;
-      const g = event.gamma * Math.PI / 180;
-
-      // Z-Komponente des horizontalen Blickvektors der Rückkamera in Weltkoordinaten.
-      // Für Portrait ist beta=90° ungefähr Horizont; in Landscape übernimmt gamma.
-      const angle = (screen.orientation && typeof screen.orientation.angle === 'number')
-        ? ((screen.orientation.angle % 360) + 360) % 360
-        : (((typeof window.orientation === 'number' ? window.orientation : 0) % 360) + 360) % 360;
-
-      let p;
-      if (angle === 90) {
-        p = 90 - Math.abs(event.gamma);
-        // Vorzeichen anhand der Querformat-Neigung
-        if (event.gamma < 0) p = -p;
-      } else if (angle === 270) {
-        p = 90 - Math.abs(event.gamma);
-        if (event.gamma > 0) p = -p;
-      } else if (angle === 180) {
-        p = 90 - Math.abs(event.beta);
-        if (event.beta > 0) p = -p;
-      } else {
-        p = event.beta - 90;
-      }
-
-      // Normalisieren und auf sinnvollen Kamera-Höhenwinkel begrenzen.
-      while (p > 90) p -= 180;
-      while (p < -90) p += 180;
-      pitch = p;
-
+    if (p != null && isFinite(p)) {
+      pitch = Math.max(-90, Math.min(90, p));
       const sign = pitch >= 0 ? '+' : '';
       pitchEl.textContent = 'Höhenwinkel: ' + sign + pitch.toFixed(1) + '°';
       updateCameraTarget();
 
-      // V6.8: Auch reines Heben/Senken des iPhones aktualisiert den 3D-Blick.
       if (terrainMap && terrainMode === 'look' && terrainPanel.style.display !== 'none') {
         const pdiff = lastTerrainPitch == null ? 999 : Math.abs(pitch - lastTerrainPitch);
         if (pdiff >= 0.6 && !terrainPitchTimer) {
