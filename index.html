@@ -8,7 +8,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="GipfelPeiler" />
   <link rel="manifest" href="manifest.json" />
-  <title>GipfelPeiler V7.4</title>
+  <title>GipfelPeiler V7.12 DIAG</title>
   <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@6.9.0/dist/maplibre-gl.css" />
   <style>
     :root {
@@ -304,12 +304,13 @@
       margin: 0 auto;
       overflow: hidden;
     }
-    #diagPanel{position:absolute;left:12px;bottom:150px;z-index:30;background:rgba(0,0,0,.72);color:#fff;border:1px solid rgba(255,255,255,.35);border-radius:14px;padding:9px 11px;font:600 12px/1.35 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;white-space:pre;pointer-events:none;min-width:210px;backdrop-filter:blur(6px)}
-    #diagPanel .diagTitle{font-size:13px;margin-bottom:3px;color:#ffd34d}
-    #calibrateBtn{position:absolute;left:12px;bottom:235px;z-index:31;background:rgba(18,18,18,.82)}
+    /* V7.12 DIAG: Diagnose bewusst aus der optischen Bildmitte heraus. */
+    #diagPanel{position:absolute;right:10px;top:142px;left:auto;bottom:auto;z-index:30;background:rgba(0,0,0,.72);color:#fff;border:1px solid rgba(255,255,255,.35);border-radius:14px;padding:8px 10px;font:600 11px/1.32 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;white-space:pre;pointer-events:none;width:218px;max-width:31vw;backdrop-filter:blur(6px)}
+    #diagPanel .diagTitle{font-size:12px;margin-bottom:3px;color:#ffd34d}
+    #calibrateBtn{position:absolute;left:12px;bottom:174px;z-index:31;background:rgba(18,18,18,.86)}
     @media (orientation: landscape) {
-      #diagPanel{left:12px;bottom:12px;min-width:230px;font-size:11px}
-      #calibrateBtn{left:12px;bottom:145px}
+      #diagPanel{left:10px;right:auto;top:118px;bottom:auto;width:220px;max-width:29vw;font-size:10px}
+      #calibrateBtn{left:10px;bottom:82px}
       #cameraWrap {
         width: min(133.333dvh, 100vw);
         height: 75vw;
@@ -485,12 +486,12 @@
     <button id="shutter" aria-label="Foto aufnehmen"></button>
   </div>
 
-  <div id="diagPanel"><div class="diagTitle">V7.11 DIAG · Nordkalibrierung</div><div id="diagValues">warte auf Sensoren …</div></div>
+  <div id="diagPanel"><div class="diagTitle">V7.12 DIAG · freie Zielmitte</div><div id="diagValues">warte auf Sensoren …</div></div>
 
   <div id="startPanel">
     <div class="card">
       <h1>GipfelPeiler</h1>
-      <p>Version 7.11 DIAG kalibriert die stabile räumliche Kameraachse auf eine bekannte Kompassrichtung. Ziel anpeilen, „Nord kalibrieren“ drücken und den mit echtem Kompass bzw. Kompass-App gemessenen Winkel eingeben. Danach Hoch- und Querformat vergleichen.</p>
+      <p>Version 7.12 DIAG verändert nur die Diagnose-Oberfläche: Fadenkreuz und Zielmitte bleiben frei. Die Sensor- und Kalibrierlogik ist gegenüber V7.11 unverändert. Ziel anpeilen, „Nord kalibrieren“ drücken und danach Hoch- und Querformat vergleichen.</p>
       <button id="startBtn" class="primary">Kamera & Kompass starten</button>
       <div id="status"></div>
     </div>
