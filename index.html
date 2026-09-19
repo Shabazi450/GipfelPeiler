@@ -315,12 +315,17 @@
     /* V6.2: eigenständige, vollflächige 3D-Ansicht */
     #terrainPanel {
       position: fixed;
+      touch-action: none;
+      overscroll-behavior: none;
       inset: 0;
       z-index: 100;
       display: none;
       background: #0b0d0f;
       overflow: hidden;
     }
+
+    #terrainPanel.bird-mode { touch-action: auto; }
+    #terrainPanel.bird-mode #terrainMap { touch-action: pinch-zoom; }
     #terrainMap {
       position: absolute;
       inset: 0;
@@ -460,7 +465,7 @@
   <div id="startPanel">
     <div class="card">
       <h1>GipfelPeiler</h1>
-      <p>Version 7.3 erweitert den bodennahen MapLibre-Blick durch ein stabiles, aus dem Höhenmodell berechnetes 360°-Geländepanorama. Kamera-Zoom und 3D-Vogelansicht bleiben erhalten. Die Kamera zeigt weiterhin das Kamerabild, ein Fadenkreuz, eine feinere Kompassskala und den korrigierten Höhenwinkel. Auf dem iPhone müssen Kamera- und Bewegungssensoren einmal freigegeben werden.</p>
+      <p>Version 7.5 erweitert den bodennahen MapLibre-Blick durch ein stabiles, aus dem Höhenmodell berechnetes 360°-Geländepanorama. Kamera-Zoom und 3D-Vogelansicht bleiben erhalten. Die Kamera zeigt weiterhin das Kamerabild, ein Fadenkreuz, eine feinere Kompassskala und den korrigierten Höhenwinkel. Auf dem iPhone müssen Kamera- und Bewegungssensoren einmal freigegeben werden.</p>
       <button id="startBtn" class="primary">Kamera & Kompass starten</button>
       <div id="status"></div>
     </div>
@@ -1076,24 +1081,37 @@
     btn.addEventListener('click', () => setPanoramaZoom(Number(btn.dataset.pzoom)));
   });
 
-  // Pinch im 3D-Blick: nur den virtuellen Bildwinkel ändern, niemals die Webseite/HUD zoomen.
-  terrainPanorama.addEventListener('touchstart', (e) => {
+  // V7.5: Pinch im 3D-Blick wird auf dem GESAMTEN 3D-Panel abgefangen.
+  // In V7.4 lagen die Listener nur auf dem Canvas. Berührte ein Finger HUD/Fadenkreuz/
+  // Bedienelemente, konnte Safari stattdessen die komplette Webseite zoomen.
+  // Capture-Phase + preventDefault verhindert das, ohne den freien MapLibre-Pinch in 3D Vogel zu blockieren.
+  terrainPanel.addEventListener('touchstart', (e) => {
     if (terrainMode !== 'look' || e.touches.length !== 2) return;
     panoPinchStartDistance = touchDistance(e.touches);
     panoPinchStartZoom = panoramaZoom;
     e.preventDefault();
-  }, {passive:false});
-  terrainPanorama.addEventListener('touchmove', (e) => {
+    e.stopPropagation();
+  }, {passive:false, capture:true});
+  terrainPanel.addEventListener('touchmove', (e) => {
     if (terrainMode !== 'look' || e.touches.length !== 2 || !panoPinchStartDistance) return;
     const factor = touchDistance(e.touches) / panoPinchStartDistance;
     setPanoramaZoom(panoPinchStartZoom * factor);
     e.preventDefault();
-  }, {passive:false});
-  terrainPanorama.addEventListener('touchend', (e) => {
-    if (e.touches.length < 2) panoPinchStartDistance = 0;
-  }, {passive:false});
-  terrainPanorama.addEventListener('gesturestart', e => e.preventDefault(), {passive:false});
-  terrainPanorama.addEventListener('gesturechange', e => e.preventDefault(), {passive:false});
+    e.stopPropagation();
+  }, {passive:false, capture:true});
+  terrainPanel.addEventListener('touchend', (e) => {
+    if (terrainMode === 'look' && e.touches.length < 2) panoPinchStartDistance = 0;
+  }, {passive:false, capture:true});
+  terrainPanel.addEventListener('touchcancel', () => {
+    if (terrainMode === 'look') panoPinchStartDistance = 0;
+  }, {passive:false, capture:true});
+  ['gesturestart','gesturechange','gestureend'].forEach(type => {
+    terrainPanel.addEventListener(type, (e) => {
+      if (terrainMode !== 'look') return;
+      e.preventDefault();
+      e.stopPropagation();
+    }, {passive:false, capture:true});
+  });
 
   function buildPanorama() {
     if (!terrainMap || latitude==null || longitude==null || panoramaBuilding) return;
