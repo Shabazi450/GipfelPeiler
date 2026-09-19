@@ -617,53 +617,50 @@
     });
   }
 
-  // V7.6: Peilung aus dem optischen Achsvektor der Rueckkamera berechnen.
-  // Dadurch bleibt die Peilung beim Drehen Portrait <-> Landscape invariant:
-  // Bildschirmrotation ist nur ein Rollen des Telefons um die Kameraachse.
-  function cameraVectorFromOrientation(alphaDeg, betaDeg, gammaDeg) {
-    const a = alphaDeg * Math.PI / 180;
-    const b = betaDeg * Math.PI / 180;
-    const g = gammaDeg * Math.PI / 180;
+  // V7.7: stabile Sensorlogik.
+  // Azimut kommt direkt vom iOS-Kompass; die Bildschirmdrehung darf ihn nicht
+  // aus einem Euler-Vektor neu berechnen. Nur der Höhenwinkel wird abhängig
+  // von Portrait/Landscape aus beta/gamma abgeleitet.
+  function getScreenAngle() {
+    if (screen.orientation && typeof screen.orientation.angle === 'number') {
+      return ((screen.orientation.angle % 360) + 360) % 360;
+    }
+    if (typeof window.orientation === 'number') {
+      return ((window.orientation % 360) + 360) % 360;
+    }
+    return 0;
+  }
 
-    // Rotation nach W3C DeviceOrientation: Rz(alpha) * Rx(beta) * Ry(gamma).
-    // Die Rueckkamera blickt entlang der negativen Geraete-Z-Achse.
-    const east = -(Math.sin(a) * Math.sin(b) * Math.cos(g) + Math.sin(g) * Math.cos(a));
-    const north = -(Math.sin(a) * Math.sin(g) - Math.sin(b) * Math.cos(a) * Math.cos(g));
-    const up = -(Math.cos(b) * Math.cos(g));
-    return { east, north, up };
+  function stableElevation(beta, gamma) {
+    const angle = getScreenAngle();
+    let p;
+    if (angle === 90) {
+      // Landscape: Home/Browserkante rechts. gamma liegt bei waagerechtem Blick etwa -90°.
+      p = -gamma - 90;
+    } else if (angle === 270) {
+      // Landscape in Gegenrichtung: gamma liegt bei waagerechtem Blick etwa +90°.
+      p = gamma - 90;
+    } else if (angle === 180) {
+      // Portrait auf dem Kopf.
+      p = -beta - 90;
+    } else {
+      // Normales Portrait: beta liegt bei waagerechtem Blick etwa +90°.
+      p = beta - 90;
+    }
+    while (p > 90) p -= 180;
+    while (p < -90) p += 180;
+    return Math.max(-90, Math.min(90, p));
   }
 
   function handleOrientation(event) {
-    const hasEuler = typeof event.alpha === 'number' &&
-                     typeof event.beta === 'number' &&
-                     typeof event.gamma === 'number';
-
     let h = null;
-    let p = null;
-
-    if (hasEuler) {
-      const v = cameraVectorFromOrientation(event.alpha, event.beta, event.gamma);
-      const horizontal = Math.hypot(v.east, v.north);
-
-      // Magnetische/True-North-Korrektur von iOS uebernehmen, ohne die
-      // Bildschirmkante als Blickrichtung zu verwenden.
-      let northCorrection = 0;
-      if (typeof event.webkitCompassHeading === 'number' && isFinite(event.webkitCompassHeading)) {
-        const alphaHeading = normalize(360 - event.alpha);
-        northCorrection = ((event.webkitCompassHeading - alphaHeading + 540) % 360) - 180;
-      }
-
-      if (horizontal > 0.02) {
-        h = normalize(Math.atan2(v.east, v.north) * 180 / Math.PI + northCorrection);
-      }
-      p = Math.atan2(v.up, horizontal) * 180 / Math.PI;
-    } else {
-      // Fallback fuer Browser ohne vollstaendige Euler-Werte.
-      if (typeof event.webkitCompassHeading === 'number') h = event.webkitCompassHeading;
-      else if (typeof event.alpha === 'number') h = normalize(360 - event.alpha);
+    if (typeof event.webkitCompassHeading === 'number' && isFinite(event.webkitCompassHeading)) {
+      h = normalize(event.webkitCompassHeading);
+    } else if (typeof event.alpha === 'number' && isFinite(event.alpha)) {
+      h = normalize(360 - event.alpha);
     }
 
-    if (h != null && isFinite(h)) {
+    if (h != null) {
       heading = h;
       headingEl.textContent = h.toFixed(1) + '°';
       cardinalEl.textContent = cardinal(h);
@@ -682,20 +679,22 @@
       }
     }
 
-    if (p != null && isFinite(p)) {
-      pitch = Math.max(-90, Math.min(90, p));
-      const sign = pitch >= 0 ? '+' : '';
-      pitchEl.textContent = 'Höhenwinkel: ' + sign + pitch.toFixed(1) + '°';
-      updateCameraTarget();
-
-      if (terrainMap && terrainMode === 'look' && terrainPanel.style.display !== 'none') {
-        const pdiff = lastTerrainPitch == null ? 999 : Math.abs(pitch - lastTerrainPitch);
-        if (pdiff >= 0.6 && !terrainPitchTimer) {
-          terrainPitchTimer = setTimeout(() => {
-            terrainPitchTimer = null;
-            lastTerrainPitch = pitch;
-            if (panoramaProfile) renderPanorama();
-          }, 120);
+    if (typeof event.beta === 'number' && typeof event.gamma === 'number') {
+      const p = stableElevation(event.beta, event.gamma);
+      if (isFinite(p)) {
+        pitch = p;
+        const sign = pitch >= 0 ? '+' : '';
+        pitchEl.textContent = 'Höhenwinkel: ' + sign + pitch.toFixed(1) + '°';
+        updateCameraTarget();
+        if (terrainMap && terrainMode === 'look' && terrainPanel.style.display !== 'none') {
+          const pdiff = lastTerrainPitch == null ? 999 : Math.abs(pitch - lastTerrainPitch);
+          if (pdiff >= 0.6 && !terrainPitchTimer) {
+            terrainPitchTimer = setTimeout(() => {
+              terrainPitchTimer = null;
+              lastTerrainPitch = pitch;
+              if (panoramaProfile) renderPanorama();
+            }, 120);
+          }
         }
       }
     }
