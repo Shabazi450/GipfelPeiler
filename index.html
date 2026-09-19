@@ -8,7 +8,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="GipfelPeiler" />
   <link rel="manifest" href="manifest.json" />
-  <title>GipfelPeiler V7.12 DIAG</title>
+  <title>GipfelPeiler V7.13</title>
   <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@6.9.0/dist/maplibre-gl.css" />
   <style>
     :root {
@@ -486,12 +486,12 @@
     <button id="shutter" aria-label="Foto aufnehmen"></button>
   </div>
 
-  <div id="diagPanel"><div class="diagTitle">V7.12 DIAG · freie Zielmitte</div><div id="diagValues">warte auf Sensoren …</div></div>
+  <div id="diagPanel"><div id="diagValues"></div></div>
 
   <div id="startPanel">
     <div class="card">
       <h1>GipfelPeiler</h1>
-      <p>Version 7.12 DIAG verändert nur die Diagnose-Oberfläche: Fadenkreuz und Zielmitte bleiben frei. Die Sensor- und Kalibrierlogik ist gegenüber V7.11 unverändert. Ziel anpeilen, „Nord kalibrieren“ drücken und danach Hoch- und Querformat vergleichen.</p>
+      <p>Version 7.13 verwendet die stabilisierte Peilung für Hoch- und Querformat. Die Nordkalibrierung bleibt erhalten; Kamera, 3D-Blick, 3D-Vogel, Zielsystem und Zoom stehen wieder ohne Diagnoseanzeige zur Verfügung.</p>
       <button id="startBtn" class="primary">Kamera & Kompass starten</button>
       <div id="status"></div>
     </div>
