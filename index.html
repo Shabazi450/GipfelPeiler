@@ -8,7 +8,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="GipfelPeiler" />
   <link rel="manifest" href="manifest.json" />
-  <title>GipfelPeiler</title>
+  <title>GipfelPeiler V6.9</title>
   <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@6.9.0/dist/maplibre-gl.css" />
   <style>
     :root {
@@ -408,7 +408,7 @@
   <div id="startPanel">
     <div class="card">
       <h1>GipfelPeiler</h1>
-      <p>Version 6.8 kalibriert die 3D-Standortkamera auf echte Augenhöhe und koppelt den 3D-Blick an Azimut und Höhenwinkel des iPhones. Die Kamera zeigt weiterhin das Kamerabild, ein Fadenkreuz, eine feinere Kompassskala und den korrigierten Höhenwinkel. Auf dem iPhone müssen Kamera- und Bewegungssensoren einmal freigegeben werden.</p>
+      <p>Version 6.9 stabilisiert den 3D-Blick auf Basis der funktionierenden Terrain-Darstellung und ergänzt echten Kamera-Pinch-Zoom ohne Seitenvergrößerung. Die Kamera zeigt weiterhin das Kamerabild, ein Fadenkreuz, eine feinere Kompassskala und den korrigierten Höhenwinkel. Auf dem iPhone müssen Kamera- und Bewegungssensoren einmal freigegeben werden.</p>
       <button id="startBtn" class="primary">Kamera & Kompass starten</button>
       <div id="status"></div>
     </div>
@@ -498,6 +498,9 @@
   let shotGpsAccuracy = null;
   let shotTime = null;
   let currentZoom = 1;
+  let hardwareZoomAvailable = false;
+  let pinchStartDistance = 0;
+  let pinchStartZoom = 1;
 
   function cardinal(deg) {
     const dirs = ['N','NO','O','SO','S','SW','W','NW'];
@@ -692,23 +695,63 @@
   }
 
   async function applyZoom(value) {
-    currentZoom = value;
-    if (!stream) return;
-    const track = stream.getVideoTracks()[0];
-    if (!track || !track.getCapabilities) return;
+    const requested = Math.max(1, Math.min(6, Number(value) || 1));
+    currentZoom = requested;
+    let usedHardware = false;
 
-    const caps = track.getCapabilities();
-    if (!caps.zoom) return;
-
-    const min = caps.zoom.min ?? 1;
-    const max = caps.zoom.max ?? 1;
-    const zoom = Math.min(max, Math.max(min, value));
-    try {
-      await track.applyConstraints({ advanced: [{ zoom }] });
-    } catch (e) {
-      console.log('Zoom wird von diesem Browser/Kameramodus nicht unterstützt.', e);
+    if (stream) {
+      const track = stream.getVideoTracks()[0];
+      if (track && track.getCapabilities) {
+        const caps = track.getCapabilities();
+        if (caps.zoom) {
+          const min = caps.zoom.min ?? 1;
+          const max = caps.zoom.max ?? 1;
+          const zoom = Math.min(max, Math.max(min, requested));
+          try {
+            await track.applyConstraints({ advanced: [{ zoom }] });
+            currentZoom = zoom;
+            usedHardware = true;
+          } catch (e) {
+            console.log('Hardware-Zoom nicht verfügbar; digitaler Bildzoom wird verwendet.', e);
+          }
+        }
+      }
     }
+
+    hardwareZoomAvailable = usedHardware;
+    // Digitaler Fallback verändert ausschließlich das Kamerabild – nie HUD/Bedienelemente.
+    video.style.transformOrigin = '50% 50%';
+    video.style.transform = usedHardware ? 'none' : `scale(${currentZoom})`;
+    document.querySelectorAll('.zoomBtn').forEach(b =>
+      b.classList.toggle('active', Math.abs(Number(b.dataset.zoom) - currentZoom) < 0.15)
+    );
   }
+
+  function touchDistance(touches) {
+    const dx = touches[0].clientX - touches[1].clientX;
+    const dy = touches[0].clientY - touches[1].clientY;
+    return Math.hypot(dx, dy);
+  }
+
+  // Pinch im Kameramodus: Browser-Seitenzoom blockieren, nur Brennweite/Bildausschnitt ändern.
+  document.getElementById('app').addEventListener('touchstart', (e) => {
+    if (terrainPanel.style.display !== 'none' || e.touches.length !== 2) return;
+    pinchStartDistance = touchDistance(e.touches);
+    pinchStartZoom = currentZoom;
+    e.preventDefault();
+  }, {passive:false});
+
+  document.getElementById('app').addEventListener('touchmove', (e) => {
+    if (terrainPanel.style.display !== 'none' || e.touches.length !== 2 || !pinchStartDistance) return;
+    const factor = touchDistance(e.touches) / pinchStartDistance;
+    applyZoom(pinchStartZoom * factor);
+    e.preventDefault();
+  }, {passive:false});
+
+  document.getElementById('app').addEventListener('touchend', (e) => {
+    if (e.touches.length < 2) pinchStartDistance = 0;
+  }, {passive:false});
+
 
   document.querySelectorAll('.zoomBtn').forEach(btn => {
     btn.addEventListener('click', () => applyZoom(Number(btn.dataset.zoom)));
@@ -817,7 +860,9 @@
 
     // Im Blickmodus wird das Relief bewusst 1:1 dargestellt. Nur so entspricht
     // DEM-Höhe + 1,7 m auch optisch einer echten Augenhöhe über dem Gelände.
-    const eyeAlt = ground + 1.7;
+    // Technischer Sicherheitsabstand über dem DEM verhindert Clipping/Texture-Wände.
+    // Dies ist nur die Renderkamera; die Peilrechnung bleibt am realen Standort.
+    const eyeAlt = ground + 12;
     const viewPitch = Math.max(55, Math.min(115, 90 + (Number.isFinite(elevationAngle) ? elevationAngle : 0)));
     try {
       // MapLibre: 90° = Horizont. Werte <90 schauen nach unten, >90 nach oben.
@@ -838,7 +883,7 @@
       }
       const ev = Number.isFinite(elevationAngle) ? elevationAngle : 0;
       const es = ev >= 0 ? '+' : '';
-      terrainInfo.textContent = `3D Blick · ${bearing.toFixed(1)}° ${cardinal(bearing)} · ${es}${ev.toFixed(1)}° · Augenhöhe 1,7 m`;
+      terrainInfo.textContent = `3D Blick · ${bearing.toFixed(1)}° ${cardinal(bearing)} · ${es}${ev.toFixed(1)}° · stabiler Standortblick`;
     } catch(e) {
       console.warn('Standortkamera Fehler',e);
       terrainInfo.textContent = '3D Blick · Kamerafehler: ' + (e.message || e).slice(0,70);
@@ -848,9 +893,9 @@
   function configureTerrainInteractions() {
     if (!terrainMap) return;
     const look = terrainMode === 'look';
-    // Blickmodus: reales Relief 1:1; Vogelansicht: plastischeres Relief 1,5×.
-    // Dadurch liegt die Standortkamera in '3D Blick' tatsächlich 1,7 m über dem dargestellten Boden.
-    try { terrainMap.setTerrain({source:'terrainSource', exaggeration: look ? 1.0 : 1.5}); } catch(e) {}
+    // V6.9: stabile Terrain-Darstellung wie in V6.7. Das Relief bleibt 1,5×;
+    // die exakte Peilgeometrie wird getrennt von der reinen 3D-Darstellung behandelt.
+    try { terrainMap.setTerrain({source:'terrainSource', exaggeration: 1.5}); } catch(e) {}
     // Blickmodus: App steuert Position, Richtung und Neigung. Pinch-Zoom bleibt erlaubt.
     if (terrainMap.dragPan) look ? terrainMap.dragPan.disable() : terrainMap.dragPan.enable();
     if (terrainMap.dragRotate) look ? terrainMap.dragRotate.disable() : terrainMap.dragRotate.enable();
@@ -948,6 +993,13 @@
 
     canvas.width = outW;
     canvas.height = outH;
+    // Bei digitalem Zoom denselben vergrößerten Bildausschnitt speichern, den der Sucher zeigt.
+    if (!hardwareZoomAvailable && currentZoom > 1) {
+      const z = currentZoom;
+      const nsw = sw / z, nsh = sh / z;
+      sx += (sw - nsw) / 2; sy += (sh - nsh) / 2;
+      sw = nsw; sh = nsh;
+    }
     ctx.drawImage(video, sx, sy, sw, sh, 0, 0, outW, outH);
 
     plainFrame = document.createElement('canvas');
