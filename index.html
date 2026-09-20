@@ -8,7 +8,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="GipfelPeiler" />
   <link rel="manifest" href="manifest.json" />
-  <title>GipfelPeiler V7.13</title>
+  <title>GipfelPeiler V7.14 Fernsicht</title>
   <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@6.9.0/dist/maplibre-gl.css" />
   <style>
     :root {
@@ -491,7 +491,7 @@
   <div id="startPanel">
     <div class="card">
       <h1>GipfelPeiler</h1>
-      <p>Version 7.13 verwendet die stabilisierte Peilung für Hoch- und Querformat. Die Nordkalibrierung bleibt erhalten; Kamera, 3D-Blick, 3D-Vogel, Zielsystem und Zoom stehen wieder ohne Diagnoseanzeige zur Verfügung.</p>
+      <p>Version 7.14 erweitert den 3D-Blick für Fernsicht bis 250 km. Das Panorama berücksichtigt Erdkrümmung und Standardrefraktion und lässt sich bis 30× vergrößern. Kamera, Peilung, Kalibrierung und Zielsystem bleiben unverändert.</p>
       <button id="startBtn" class="primary">Kamera & Kompass starten</button>
       <div id="status"></div>
     </div>
@@ -513,9 +513,9 @@
     <div id="terrainHud"><div class="pill" id="terrainInfo">3D · Position wird geladen …</div><button id="closeTerrain">Kamera</button></div>
     <div id="terrainModes"><button class="terrainMode active" data-mode="look">3D Blick</button><button class="terrainMode" data-mode="bird">3D Vogel</button></div>
     <div id="terrainAim"></div>
-    <div id="terrainZoomControls"><button class="terrainZoomBtn active" data-pzoom="1">1×</button><button class="terrainZoomBtn" data-pzoom="2">2×</button><button class="terrainZoomBtn" data-pzoom="3">3×</button></div>
+    <div id="terrainZoomControls"><button class="terrainZoomBtn active" data-pzoom="1">1×</button><button class="terrainZoomBtn" data-pzoom="5">5×</button><button class="terrainZoomBtn" data-pzoom="15">15×</button><button class="terrainZoomBtn" data-pzoom="30">30×</button></div>
     <div id="terrainTargetControls"><div id="targetReadout"></div><button class="targetBtn" id="setTarget">Ziel setzen</button><button class="targetBtn" id="gotoTarget">Zum Ziel</button><button class="targetBtn" id="releaseTarget">Ziel lösen</button></div>
-    <div id="terrainHint">Panorama: iPhone steuert Richtung + Höhenwinkel</div>
+    <div id="terrainHint">Fernsicht bis 250 km · Pinch-Zoom bis 30×</div>
   </div>
 
   <div id="namePanel">
@@ -544,7 +544,7 @@
   const panoCtx = terrainPanorama.getContext('2d');
   let panoramaProfile = null, panoramaBuilding = false;
   let panoramaZoom = 1, panoPinchStartDistance = 0, panoPinchStartZoom = 1;
-  let panoramaMaxZoom = 15;
+  let panoramaMaxZoom = 30;
   let lockedTarget = null, targetMarker = null;
   let terrainMap = null;
   let terrainMarker = null;
@@ -1138,24 +1138,38 @@
     if (!terrainMap || latitude==null || longitude==null || panoramaBuilding) return;
     panoramaBuilding=true; panoramaProfile=null;
     terrainInfo.textContent='3D Blick · Geländeprofil wird berechnet …';
-    const b=0.32;
-    terrainMap.fitBounds([[longitude-b,latitude-b],[longitude+b,latitude+b]],{padding:10,pitch:0,bearing:0,duration:0});
+    // V7.14 Fernsicht: DEM-Kacheln für den gesamten 250-km-Radius laden.
+    // Die vier Randpunkte liefern auch bei unterschiedlichen Breitengraden saubere Kartenbounds.
+    const maxRange=250000;
+    const n=destinationPoint(latitude,longitude,0,maxRange), e=destinationPoint(latitude,longitude,90,maxRange);
+    const sPt=destinationPoint(latitude,longitude,180,maxRange), wPt=destinationPoint(latitude,longitude,270,maxRange);
+    terrainMap.fitBounds([[wPt[0],sPt[1]],[e[0],n[1]]],{padding:6,pitch:0,bearing:0,duration:0});
     const run=()=>{
       const ground=terrainMap.queryTerrainElevation([longitude,latitude],{exaggerated:false});
-      if(!Number.isFinite(ground)){ panoramaBuilding=false; setTimeout(buildPanorama,700); return; }
+      if(!Number.isFinite(ground)){ panoramaBuilding=false; setTimeout(buildPanorama,900); return; }
       cachedGroundHeight=ground;
-      const distances=[150,250,400,600,850,1200,1700,2400,3300,4500,6000,8000,10500,13500,17000,21500,27000,34000,42000,50000];
+      // Nahbereich fein, Fernbereich zunehmend gröber. 250 km deckt auch Alpen-Fernsichten ab.
+      const distances=[150,250,400,600,850,1200,1700,2400,3300,4500,6000,8000,10500,13500,17000,21500,27000,34000,42000,50000,60000,72000,85000,100000,115000,130000,145000,160000,180000,200000,225000,250000];
       const prof=[];
-      for(let az=0;az<360;az+=2){
-        let maxA=-12, samples=[];
+      // Standard-Näherung für terrestrische Sicht: effektiver Erdradius 7/6 R durch Refraktion.
+      const effectiveEarthRadius=6371000*(7/6);
+      for(let az=0;az<360;az+=0.25){
+        let maxA=-20, samples=[];
         for(const d of distances){
           const pt=destinationPoint(latitude,longitude,az,d);
           const z=terrainMap.queryTerrainElevation(pt,{exaggerated:false});
-          if(Number.isFinite(z)){ const a=Math.atan2(z-(ground+1.7),d)*180/Math.PI; samples.push({distance:d,elevation:z,angle:a}); if(a>maxA) maxA=a; }
+          if(Number.isFinite(z)){
+            const curvatureDrop=(d*d)/(2*effectiveEarthRadius);
+            const apparentDz=z-(ground+1.7)-curvatureDrop;
+            const a=Math.atan2(apparentDz,d)*180/Math.PI;
+            samples.push({distance:d,elevation:z,angle:a});
+            if(a>maxA) maxA=a;
+          }
         }
         prof.push({az,angle:maxA,samples});
       }
       panoramaProfile=prof; panoramaBuilding=false; renderPanorama();
+      terrainInfo.textContent=`3D Blick · Fernsicht 250 km · ${panoramaZoom.toFixed(1)}×`;
     };
     terrainMap.once('idle',run);
     setTimeout(()=>{ if(panoramaBuilding && !panoramaProfile) run(); },1800);
