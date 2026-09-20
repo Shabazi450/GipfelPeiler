@@ -8,7 +8,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="GipfelPeiler" />
   <link rel="manifest" href="manifest.json" />
-  <title>GipfelPeiler V7.15 Fernsicht</title>
+  <title>GipfelPeiler V7.16 Fernsicht-Diagnose</title>
   <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@6.9.0/dist/maplibre-gl.css" />
   <style>
     :root {
@@ -387,6 +387,12 @@
     .terrainZoomBtn { border:1px solid rgba(255,255,255,.28); border-radius:14px; padding:8px 13px; background:transparent; color:#fff; font-weight:700; }
     .terrainZoomBtn.active { background:rgba(255,255,255,.28); border-color:rgba(255,255,255,.72); }
 
+    #horizonReadout {
+      position:absolute; left:50%; top:calc(50% + 58px); transform:translateX(-50%); z-index:7;
+      padding:8px 12px; border-radius:14px; background:rgba(20,24,20,.76); color:#fff;
+      font-size:14px; font-weight:650; white-space:nowrap; pointer-events:none; display:none;
+      box-shadow:0 1px 5px rgba(0,0,0,.25);
+    }
     #terrainHint {
       position:absolute; left:50%; bottom:calc(env(safe-area-inset-bottom, 0px) + 18px);
       transform:translateX(-50%); z-index:110; padding:8px 12px; border-radius:16px;
@@ -420,7 +426,8 @@
       #terrainTop { top: calc(var(--safe-top) + 6px); left: calc(env(safe-area-inset-left) + 10px); right: calc(env(safe-area-inset-right) + 10px); }
       #terrainModes { top: calc(var(--safe-top) + 54px); }
       #terrainZoomControls { bottom: calc(var(--safe-bottom) + 14px); }
-      #terrainHint { left:auto; right:calc(env(safe-area-inset-right) + 64px); bottom:calc(var(--safe-bottom) + 14px); transform:none; max-width:38%; overflow:hidden; text-overflow:ellipsis; }
+      #horizonReadout { top:calc(50% + 46px); font-size:12px; padding:6px 9px; }
+    #terrainHint { left:auto; right:calc(env(safe-area-inset-right) + 64px); bottom:calc(var(--safe-bottom) + 14px); transform:none; max-width:38%; overflow:hidden; text-overflow:ellipsis; }
       #terrainTargetControls { left:calc(env(safe-area-inset-left) + 12px); bottom:calc(var(--safe-bottom) + 72px); max-width:36%; }
       #terrainPanel.bird-mode #terrainTargetControls { left:calc(env(safe-area-inset-left) + 12px); }
       #targetReadout { max-width:280px; font-size:12px; }
@@ -491,7 +498,7 @@
   <div id="startPanel">
     <div class="card">
       <h1>GipfelPeiler</h1>
-      <p>Version 7.15 ergänzt einen hochauflösenden Fernsicht-Scan: Bei 5×, 15× und 30× wird der sichtbare Winkelbereich direkt aus Mapterhorn-DEM-Kacheln neu berechnet. Reichweite 250 km, Erdkrümmung und Standardrefraktion inklusive.</p>
+      <p>Version 7.16 ergänzt die Fernsicht-Diagnose: Am Fadenkreuz werden Entfernung, Geländehöhe, Azimut und Höhenwinkel des tatsächlich sichtbaren Horizontpunkts angezeigt. Die Fernsicht bis 250 km bleibt unverändert.</p>
       <button id="startBtn" class="primary">Kamera & Kompass starten</button>
       <div id="status"></div>
     </div>
@@ -513,6 +520,7 @@
     <div id="terrainHud"><div class="pill" id="terrainInfo">3D · Position wird geladen …</div><button id="closeTerrain">Kamera</button></div>
     <div id="terrainModes"><button class="terrainMode active" data-mode="look">3D Blick</button><button class="terrainMode" data-mode="bird">3D Vogel</button></div>
     <div id="terrainAim"></div>
+    <div id="horizonReadout"></div>
     <div id="terrainZoomControls"><button class="terrainZoomBtn active" data-pzoom="1">1×</button><button class="terrainZoomBtn" data-pzoom="5">5×</button><button class="terrainZoomBtn" data-pzoom="15">15×</button><button class="terrainZoomBtn" data-pzoom="30">30×</button></div>
     <div id="terrainTargetControls"><div id="targetReadout"></div><button class="targetBtn" id="setTarget">Ziel setzen</button><button class="targetBtn" id="gotoTarget">Zum Ziel</button><button class="targetBtn" id="releaseTarget">Ziel lösen</button></div>
     <div id="terrainHint">Fernsicht bis 250 km · Pinch-Zoom bis 30×</div>
@@ -541,6 +549,7 @@
   const closeTerrain = document.getElementById('closeTerrain');
   const terrainInfo = document.getElementById('terrainInfo');
   const terrainPanorama = document.getElementById('terrainPanorama');
+  const horizonReadout = document.getElementById('horizonReadout');
   const panoCtx = terrainPanorama.getContext('2d');
   let panoramaProfile = null, panoramaBuilding = false;
   let panoramaZoom = 1, panoPinchStartDistance = 0, panoPinchStartZoom = 1;
@@ -1140,6 +1149,21 @@
     c.addEventListener('pointerdown',e=>{if(e.pointerType==='mouse')armBirdHold(e)}); c.addEventListener('pointermove',e=>{if(e.pointerType==='mouse')moveBirdHold(e)}); c.addEventListener('pointerup',cancelBirdHold); c.addEventListener('pointercancel',cancelBirdHold);
   }
 
+  function updateHorizonReadout() {
+    if (terrainMode !== 'look' || panoramaZoom < 5 || !farProfile || heading == null) {
+      horizonReadout.style.display='none'; return;
+    }
+    const q=nearestProfile(heading);
+    if(!q || !q.best || !Number.isFinite(q.best.distance) || !Number.isFinite(q.best.elevation)){
+      horizonReadout.style.display='none'; return;
+    }
+    const d=q.best.distance;
+    const dist=d>=10000 ? `${(d/1000).toFixed(1)} km` : `${(d/1000).toFixed(2)} km`;
+    const a=q.best.angle;
+    horizonReadout.textContent=`Horizont · ${dist} · ${Math.round(q.best.elevation)} m · ${q.az.toFixed(1)}° ${cardinal(q.az)} · ${(a>=0?'+':'')}${a.toFixed(2)}°`;
+    horizonReadout.style.display='block';
+  }
+
   function renderPanorama() {
     if (!panoramaProfile) return;
     resizePanorama();
@@ -1168,6 +1192,7 @@
     panoCtx.strokeStyle='rgba(255,255,255,.16)'; panoCtx.lineWidth=1;
     for(let off=18;off<150;off+=22){ panoCtx.beginPath(); pts.forEach(([x,y],i)=>i?panoCtx.lineTo(x,y+off):panoCtx.moveTo(x,y+off)); panoCtx.stroke(); }
     drawLockedTarget(w,h,hfov,vfov);
+    updateHorizonReadout();
     terrainInfo.textContent=`3D Blick · ${centerH.toFixed(1)}° ${cardinal(centerH)} · ${(centerV>=0?'+':'')}${centerV.toFixed(1)}° · ${panoramaZoom.toFixed(1)}×`;
   }
 
@@ -1308,6 +1333,7 @@
     terrainMode=btn.dataset.mode;
     document.querySelectorAll('.terrainMode').forEach(b=>b.classList.toggle('active',b===btn));
     terrainPanel.classList.toggle('bird-mode',terrainMode==='bird');
+    if(terrainMode==='bird') horizonReadout.style.display='none';
     terrainHint.textContent = terrainMode==='look' ? 'Standortkamera: iPhone steuert Richtung + Höhenwinkel' : 'Frei bewegen · Ziel: gewünschten Punkt 0,7 s gedrückt halten';
     refreshTargetUI();
     if (demRetryTimer) { clearTimeout(demRetryTimer); demRetryTimer=null; }
