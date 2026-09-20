@@ -8,7 +8,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="GipfelPeiler" />
   <link rel="manifest" href="manifest.json" />
-  <title>GipfelPeiler V7.16 Fernsicht-Diagnose</title>
+  <title>GipfelPeiler V7.17 Fernpeilung</title>
   <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@6.9.0/dist/maplibre-gl.css" />
   <style>
     :root {
@@ -388,11 +388,13 @@
     .terrainZoomBtn.active { background:rgba(255,255,255,.28); border-color:rgba(255,255,255,.72); }
 
     #horizonReadout {
-      position:absolute; left:50%; top:calc(50% + 58px); transform:translateX(-50%); z-index:7;
+      position:absolute; left:50%; top:112px; transform:translateX(-50%); z-index:7;
       padding:8px 12px; border-radius:14px; background:rgba(20,24,20,.76); color:#fff;
       font-size:14px; font-weight:650; white-space:nowrap; pointer-events:none; display:none;
       box-shadow:0 1px 5px rgba(0,0,0,.25);
     }
+    #lookLock { position:absolute; right:14px; top:112px; z-index:116; border:1px solid rgba(255,255,255,.55); border-radius:14px; padding:8px 11px; background:rgba(0,0,0,.68); color:#fff; font-weight:750; }
+    #lookLock.locked { background:rgba(255,216,77,.28); border-color:#ffd84d; }
     #terrainHint {
       position:absolute; left:50%; bottom:calc(env(safe-area-inset-bottom, 0px) + 18px);
       transform:translateX(-50%); z-index:110; padding:8px 12px; border-radius:16px;
@@ -426,7 +428,10 @@
       #terrainTop { top: calc(var(--safe-top) + 6px); left: calc(env(safe-area-inset-left) + 10px); right: calc(env(safe-area-inset-right) + 10px); }
       #terrainModes { top: calc(var(--safe-top) + 54px); }
       #terrainZoomControls { bottom: calc(var(--safe-bottom) + 14px); }
-      #horizonReadout { top:calc(50% + 46px); font-size:12px; padding:6px 9px; }
+      #horizonReadout { top:calc(var(--safe-top) + 98px); font-size:12px; padding:6px 9px; }
+      #lookLock { top:calc(var(--safe-top) + 96px); right:calc(env(safe-area-inset-right) + 12px); }
+    #lookLock { position:absolute; right:14px; top:112px; z-index:116; border:1px solid rgba(255,255,255,.55); border-radius:14px; padding:8px 11px; background:rgba(0,0,0,.68); color:#fff; font-weight:750; }
+    #lookLock.locked { background:rgba(255,216,77,.28); border-color:#ffd84d; }
     #terrainHint { left:auto; right:calc(env(safe-area-inset-right) + 64px); bottom:calc(var(--safe-bottom) + 14px); transform:none; max-width:38%; overflow:hidden; text-overflow:ellipsis; }
       #terrainTargetControls { left:calc(env(safe-area-inset-left) + 12px); bottom:calc(var(--safe-bottom) + 72px); max-width:36%; }
       #terrainPanel.bird-mode #terrainTargetControls { left:calc(env(safe-area-inset-left) + 12px); }
@@ -498,7 +503,7 @@
   <div id="startPanel">
     <div class="card">
       <h1>GipfelPeiler</h1>
-      <p>Version 7.16 ergänzt die Fernsicht-Diagnose: Am Fadenkreuz werden Entfernung, Geländehöhe, Azimut und Höhenwinkel des tatsächlich sichtbaren Horizontpunkts angezeigt. Die Fernsicht bis 250 km bleibt unverändert.</p>
+      <p>Version 7.17 verbessert die Fernpeilung: geglättete Sensorsteuerung, Fixieren, Finger-Feinpeilung und eine dauerhaft sichtbare Horizontanzeige mit Entfernung, Höhe, Azimut und Höhenwinkel.</p>
       <button id="startBtn" class="primary">Kamera & Kompass starten</button>
       <div id="status"></div>
     </div>
@@ -520,10 +525,10 @@
     <div id="terrainHud"><div class="pill" id="terrainInfo">3D · Position wird geladen …</div><button id="closeTerrain">Kamera</button></div>
     <div id="terrainModes"><button class="terrainMode active" data-mode="look">3D Blick</button><button class="terrainMode" data-mode="bird">3D Vogel</button></div>
     <div id="terrainAim"></div>
-    <div id="horizonReadout"></div>
+    <div id="horizonReadout">Horizont wird berechnet …</div><button id="lookLock">Fixieren</button>
     <div id="terrainZoomControls"><button class="terrainZoomBtn active" data-pzoom="1">1×</button><button class="terrainZoomBtn" data-pzoom="5">5×</button><button class="terrainZoomBtn" data-pzoom="15">15×</button><button class="terrainZoomBtn" data-pzoom="30">30×</button></div>
     <div id="terrainTargetControls"><div id="targetReadout"></div><button class="targetBtn" id="setTarget">Ziel setzen</button><button class="targetBtn" id="gotoTarget">Zum Ziel</button><button class="targetBtn" id="releaseTarget">Ziel lösen</button></div>
-    <div id="terrainHint">Fernsicht bis 250 km · Pinch-Zoom bis 30×</div>
+    <div id="terrainHint">Fernsicht 250 km · Fixieren + Finger-Feinpeilung</div>
   </div>
 
   <div id="namePanel">
@@ -550,10 +555,13 @@
   const terrainInfo = document.getElementById('terrainInfo');
   const terrainPanorama = document.getElementById('terrainPanorama');
   const horizonReadout = document.getElementById('horizonReadout');
+  const lookLock = document.getElementById('lookLock');
   const panoCtx = terrainPanorama.getContext('2d');
   let panoramaProfile = null, panoramaBuilding = false;
   let panoramaZoom = 1, panoPinchStartDistance = 0, panoPinchStartZoom = 1;
   let panoramaMaxZoom = 30;
+  let lookLocked=false, lookHeading=null, lookPitch=null, frozenLookHeading=null, frozenLookPitch=null;
+  let lookDrag=null, farRebuildTimer=null;
   // V7.15: direkter DEM-Kachelcache für hochauflösende Fernsicht.
   const farDemTileCache = new Map();
   let farProfile = null, farProfileKey = '', farBuildToken = 0;
@@ -705,6 +713,17 @@
       'calc pitch:     '+fmtDiag(pose&&pose.pitch)+'\n'+
       'accuracy:       '+(acc==null?'–':acc.toFixed(1)+'°');
   }
+  function smoothAngle(prev,next,a){
+    if(prev==null || !isFinite(prev)) return next;
+    return normalize(prev + angleDiff(next,prev)*a);
+  }
+  function lookCenterHeading(){ return lookLocked && frozenLookHeading!=null ? frozenLookHeading : (lookHeading!=null?lookHeading:(heading??0)); }
+  function lookCenterPitch(){ return lookLocked && frozenLookPitch!=null ? frozenLookPitch : (lookPitch!=null?lookPitch:(pitch??0)); }
+  function scheduleFarRebuild(){
+    if(panoramaZoom<5 || terrainMode!=='look' || lookLocked) return;
+    if(farRebuildTimer) clearTimeout(farRebuildTimer);
+    farRebuildTimer=setTimeout(()=>{farRebuildTimer=null; buildFarProfile();},450);
+  }
   function handleOrientation(event) {
     const alpha=(typeof event.alpha==='number'&&isFinite(event.alpha))?event.alpha:0;
     const beta=(typeof event.beta==='number'&&isFinite(event.beta))?event.beta:null;
@@ -716,10 +735,12 @@
     const h=calibratedHeading(pose.heading);
     if(isFinite(h)){
       heading=h; headingEl.textContent=h.toFixed(1)+'°'; cardinalEl.textContent=cardinal(h); sensorStatus.textContent=northOffset==null?'Kompass: kalibrieren':'Kompass: kalibriert'; updateTape(); updateCameraTarget();
+      if(!lookLocked){ const a=panoramaZoom>=15?0.10:(panoramaZoom>=5?0.16:0.25); lookHeading=smoothAngle(lookHeading,h,a); }
       if(terrainMap&&terrainMode==='look'&&terrainPanel.style.display!=='none'){const diff=lastTerrainHeading==null?999:Math.abs(((h-lastTerrainHeading+540)%360)-180);if(diff>=1&&!terrainHeadingTimer)terrainHeadingTimer=setTimeout(()=>{terrainHeadingTimer=null;lastTerrainHeading=heading;if(panoramaProfile)renderPanorama();else updateTerrainView(false);},180);}
     }
     if(isFinite(pose.pitch)){
       pitch=Math.max(-90,Math.min(90,pose.pitch)); const sign=pitch>=0?'+':''; pitchEl.textContent='Höhenwinkel: '+sign+pitch.toFixed(1)+'°'; updateCameraTarget();
+      if(!lookLocked){ const a=panoramaZoom>=15?0.10:(panoramaZoom>=5?0.16:0.25); lookPitch=lookPitch==null?pitch:(lookPitch+(pitch-lookPitch)*a); }
       if(terrainMap&&terrainMode==='look'&&terrainPanel.style.display!=='none'){const pdiff=lastTerrainPitch==null?999:Math.abs(pitch-lastTerrainPitch);if(pdiff>=0.6&&!terrainPitchTimer)terrainPitchTimer=setTimeout(()=>{terrainPitchTimer=null;lastTerrainPitch=pitch;if(panoramaProfile)renderPanorama();},120);}
     }
   }
@@ -1013,7 +1034,7 @@
 
   async function buildFarProfile(){
     if(latitude==null||longitude==null||panoramaZoom<5) return;
-    const token=++farBuildToken, centerH=heading??0, hfov=72/panoramaZoom;
+    const token=++farBuildToken, centerH=lookCenterHeading(), hfov=72/panoramaZoom;
     const key=`${latitude.toFixed(4)}|${longitude.toFixed(4)}|${centerH.toFixed(2)}|${panoramaZoom.toFixed(2)}`;
     farProfileKey=key; farProfile=null;
     terrainInfo.textContent=`3D Blick · Fernsicht ${panoramaZoom.toFixed(0)}× wird hochauflösend berechnet …`;
@@ -1062,8 +1083,8 @@
 
   function targetScreenPosition(hfov,vfov,w,h) {
     if(!lockedTarget) return null;
-    const dh=angleDiff(lockedTarget.az, heading ?? 0);
-    const dv=lockedTarget.angle-(pitch ?? 0);
+    const dh=angleDiff(lockedTarget.az, lookCenterHeading());
+    const dv=lockedTarget.angle-lookCenterPitch();
     return {x:w/2 + dh*(w/hfov), y:h/2 - dv*(h/vfov), dh, dv};
   }
 
@@ -1104,10 +1125,10 @@
   }
 
   function setTargetFromAim(){
-    if(!panoramaProfile || heading==null || pitch==null) return;
-    const q=nearestProfile(heading); if(!q || !q.samples || !q.samples.length) return;
+    if(!panoramaProfile || lookCenterHeading()==null || lookCenterPitch()==null) return;
+    const q=nearestProfile(lookCenterHeading()); if(!q || !q.samples || !q.samples.length) return;
     let best=q.samples[0], bd=999;
-    for(const sm of q.samples){ const d=Math.abs(sm.angle-pitch); if(d<bd){bd=d;best=sm;} }
+    for(const sm of q.samples){ const d=Math.abs(sm.angle-lookCenterPitch()); if(d<bd){bd=d;best=sm;} }
     const pt=destinationPoint(latitude,longitude,q.az,best.distance);
     lockedTarget={az:q.az,angle:best.angle,distance:best.distance,elevation:best.elevation,lon:pt[0],lat:pt[1]};
     refreshTargetUI(); renderPanorama();
@@ -1150,25 +1171,24 @@
   }
 
   function updateHorizonReadout() {
-    if (terrainMode !== 'look' || panoramaZoom < 5 || !farProfile || heading == null) {
-      horizonReadout.style.display='none'; return;
-    }
-    const q=nearestProfile(heading);
+    if (terrainMode !== 'look') { horizonReadout.style.display='none'; return; }
+    horizonReadout.style.display='block';
+    if (panoramaZoom < 5) { horizonReadout.textContent='Horizont · für Messung auf 5×, 15× oder 30× zoomen'; return; }
+    if (!farProfile) { horizonReadout.textContent='Horizont · Fernprofil wird berechnet …'; return; }
+    const az=lookCenterHeading(), q=nearestProfile(az);
     if(!q || !q.best || !Number.isFinite(q.best.distance) || !Number.isFinite(q.best.elevation)){
-      horizonReadout.style.display='none'; return;
+      horizonReadout.textContent='Horizont · keine Messdaten am Fadenkreuz'; return;
     }
-    const d=q.best.distance;
-    const dist=d>=10000 ? `${(d/1000).toFixed(1)} km` : `${(d/1000).toFixed(2)} km`;
+    const d=q.best.distance, dist=d>=10000 ? `${(d/1000).toFixed(1)} km` : `${(d/1000).toFixed(2)} km`;
     const a=q.best.angle;
     horizonReadout.textContent=`Horizont · ${dist} · ${Math.round(q.best.elevation)} m · ${q.az.toFixed(1)}° ${cardinal(q.az)} · ${(a>=0?'+':'')}${a.toFixed(2)}°`;
-    horizonReadout.style.display='block';
   }
 
   function renderPanorama() {
     if (!panoramaProfile) return;
     resizePanorama();
     const w=terrainPanorama.clientWidth, h=terrainPanorama.clientHeight;
-    const centerH=heading ?? 0, centerV=pitch ?? 0;
+    const centerH=lookCenterHeading(), centerV=lookCenterPitch();
     const hfov=72/panoramaZoom, vfov=hfov*h/w;
     const yFor=a => h/2 - (a-centerV)*(h/vfov);
     const grad=panoCtx.createLinearGradient(0,0,0,h);
@@ -1193,11 +1213,12 @@
     for(let off=18;off<150;off+=22){ panoCtx.beginPath(); pts.forEach(([x,y],i)=>i?panoCtx.lineTo(x,y+off):panoCtx.moveTo(x,y+off)); panoCtx.stroke(); }
     drawLockedTarget(w,h,hfov,vfov);
     updateHorizonReadout();
-    terrainInfo.textContent=`3D Blick · ${centerH.toFixed(1)}° ${cardinal(centerH)} · ${(centerV>=0?'+':'')}${centerV.toFixed(1)}° · ${panoramaZoom.toFixed(1)}×`;
+    terrainInfo.textContent=`3D Blick · ${centerH.toFixed(1)}° ${cardinal(centerH)} · ${(centerV>=0?'+':'')}${centerV.toFixed(1)}° · ${panoramaZoom.toFixed(1)}×${lookLocked?' · FIX':''}`;
   }
 
   function setPanoramaZoom(z) {
     panoramaZoom = Math.max(1, Math.min(panoramaMaxZoom, z));
+    if(lookHeading==null) lookHeading=heading; if(lookPitch==null) lookPitch=pitch;
     document.querySelectorAll('.terrainZoomBtn').forEach(b =>
       b.classList.toggle('active', Math.abs(Number(b.dataset.pzoom) - panoramaZoom) < 0.15)
     );
@@ -1207,6 +1228,32 @@
       else { farBuildToken++; farProfile=null; farProfileKey=''; }
     }
   }
+
+
+  lookLock.addEventListener('click',()=>{
+    lookLocked=!lookLocked;
+    if(lookLocked){ frozenLookHeading=lookCenterHeading(); frozenLookPitch=lookCenterPitch(); lookLock.textContent='Lösen'; lookLock.classList.add('locked'); }
+    else { lookHeading=heading; lookPitch=pitch; frozenLookHeading=frozenLookPitch=null; lookLock.textContent='Fixieren'; lookLock.classList.remove('locked'); scheduleFarRebuild(); }
+    renderPanorama();
+  });
+
+  // Ein-Finger-Feinpeilung: im fixierten 3D-Blick verschiebt der Finger den Blickwinkel,
+  // das Fadenkreuz bleibt stehen. Besonders für 15×/30× gedacht.
+  terrainPanorama.addEventListener('pointerdown',e=>{
+    if(terrainMode!=='look' || !lookLocked) return;
+    lookDrag={x:e.clientX,y:e.clientY,h:frozenLookHeading,p:frozenLookPitch};
+    try{terrainPanorama.setPointerCapture(e.pointerId)}catch(_){ }
+    e.preventDefault();
+  });
+  terrainPanorama.addEventListener('pointermove',e=>{
+    if(!lookDrag || !lookLocked) return;
+    const r=terrainPanorama.getBoundingClientRect(), hfov=72/panoramaZoom, vfov=hfov*r.height/r.width;
+    frozenLookHeading=normalize(lookDrag.h-(e.clientX-lookDrag.x)*hfov/r.width);
+    frozenLookPitch=Math.max(-89,Math.min(89,lookDrag.p+(e.clientY-lookDrag.y)*vfov/r.height));
+    renderPanorama(); e.preventDefault();
+  });
+  const endLookDrag=()=>{ if(lookDrag){lookDrag=null; if(panoramaZoom>=5) buildFarProfile();} };
+  terrainPanorama.addEventListener('pointerup',endLookDrag); terrainPanorama.addEventListener('pointercancel',endLookDrag);
 
   document.querySelectorAll('.terrainZoomBtn').forEach(btn => {
     btn.addEventListener('click', () => setPanoramaZoom(Number(btn.dataset.pzoom)));
