@@ -388,9 +388,9 @@
     .terrainZoomBtn.active { background:rgba(255,255,255,.28); border-color:rgba(255,255,255,.72); }
 
     #horizonReadout {
-      position:absolute; left:50%; top:112px; transform:translateX(-50%); z-index:7;
+      position:absolute; left:50%; top:112px; transform:translateX(-50%); z-index:115;
       padding:8px 12px; border-radius:14px; background:rgba(20,24,20,.76); color:#fff;
-      font-size:14px; font-weight:650; white-space:nowrap; pointer-events:none; display:none;
+      font-size:13px; font-weight:700; white-space:normal; text-align:center; max-width:calc(100vw - 170px); pointer-events:none; display:none;
       box-shadow:0 1px 5px rgba(0,0,0,.25);
     }
     #lookLock { position:absolute; right:14px; top:112px; z-index:116; border:1px solid rgba(255,255,255,.55); border-radius:14px; padding:8px 11px; background:rgba(0,0,0,.68); color:#fff; font-weight:750; }
@@ -503,7 +503,7 @@
   <div id="startPanel">
     <div class="card">
       <h1>GipfelPeiler</h1>
-      <p>Version 7.17 verbessert die Fernpeilung: geglättete Sensorsteuerung, Fixieren, Finger-Feinpeilung und eine dauerhaft sichtbare Horizontanzeige mit Entfernung, Höhe, Azimut und Höhenwinkel.</p>
+      <p>Version 7.18 verbessert die Fernpeilung: geglättete Sensorsteuerung, Fixieren, Finger-Feinpeilung und eine dauerhaft sichtbare Horizontanzeige mit Entfernung, Höhe, Azimut und Höhenwinkel.</p>
       <button id="startBtn" class="primary">Kamera & Kompass starten</button>
       <div id="status"></div>
     </div>
@@ -1173,15 +1173,15 @@
   function updateHorizonReadout() {
     if (terrainMode !== 'look') { horizonReadout.style.display='none'; return; }
     horizonReadout.style.display='block';
-    if (panoramaZoom < 5) { horizonReadout.textContent='Horizont · für Messung auf 5×, 15× oder 30× zoomen'; return; }
-    if (!farProfile) { horizonReadout.textContent='Horizont · Fernprofil wird berechnet …'; return; }
+    if (panoramaZoom < 5) { horizonReadout.textContent='Fadenkreuz · für Messung auf 5×, 15× oder 30× zoomen'; return; }
+    if (!farProfile) { horizonReadout.textContent='Fadenkreuz · Fernprofil wird berechnet …'; return; }
     const az=lookCenterHeading(), q=nearestProfile(az);
     if(!q || !q.best || !Number.isFinite(q.best.distance) || !Number.isFinite(q.best.elevation)){
-      horizonReadout.textContent='Horizont · keine Messdaten am Fadenkreuz'; return;
+      horizonReadout.textContent='Fadenkreuz · keine Messdaten'; return;
     }
     const d=q.best.distance, dist=d>=10000 ? `${(d/1000).toFixed(1)} km` : `${(d/1000).toFixed(2)} km`;
     const a=q.best.angle;
-    horizonReadout.textContent=`Horizont · ${dist} · ${Math.round(q.best.elevation)} m · ${q.az.toFixed(1)}° ${cardinal(q.az)} · ${(a>=0?'+':'')}${a.toFixed(2)}°`;
+    horizonReadout.textContent=`Fadenkreuz · ${dist} · ${Math.round(q.best.elevation)} m · ${q.az.toFixed(1)}° ${cardinal(q.az)} · ${(a>=0?'+':'')}${a.toFixed(2)}°`;
   }
 
   function renderPanorama() {
